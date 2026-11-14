@@ -1,6 +1,7 @@
 import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { listWorkspaceSessions, requestWorkspace } from "../../../lib/workspace";
+import { WorkspaceActivity } from "./activity-summary";
 import { RefreshSessions } from "./refresh-sessions";
 import { WorkspaceUsage } from "./usage-summary";
 
@@ -23,6 +24,7 @@ export default async function WorkspacePage({ params }: PageProps<"/workspace/[i
         <h1 className="text-4xl font-semibold tracking-tight">{workspace.name}</h1>
       </div>
       <WorkspaceUsage sessions={sessions} />
+      <WorkspaceActivity sessions={sessions} />
       <section className="mt-10 space-y-4" aria-labelledby="sessions">
         <h2 id="sessions" className="text-xl font-semibold">Sessions</h2>
         {sessions.length ? (

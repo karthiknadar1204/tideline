@@ -1,5 +1,6 @@
 import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import { z } from "zod";
+import { createCodexActivity } from "./codex-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
 import { combineTokens, createModelUsage, readModelId, zeroTokens } from "./session-usage";
@@ -36,7 +37,7 @@ const rolloutTimestamp = z.iso.datetime();
 const messageRecord = z.object({ type: z.literal("message"), role: z.enum(["user", "assistant"]) });
 const messageContent = z.object({ content: z.array(z.unknown()) });
 const textPart = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() });
-const codexContext = /^(?:#\s*agents\.md instructions for\b|<(?:environment_context|user_instructions|permissions instructions)(?:\s|>))/iu;
+const codexContext = /^(?:#\s*agents\.md instructions for\b|<(?:environment_context|user_instructions|permissions instructions|skill|skills_instructions)(?:\s|>))/iu;
 
 export function readCodexSession(path: string): Promise<SessionProjection>;
 export function readCodexSession(path: string, options: LiveReadOptions): Promise<LiveSession | undefined>;
@@ -46,6 +47,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const projectScope = createProjectScope(options?.projectDirectory);
   let projectDirectory: string | undefined;
   const usage = createModelUsage();
+  const activity = createCodexActivity();
   let throughLine = 0;
   let lastPromptLine = 0;
   let lastUsageLine = 0;
@@ -94,6 +96,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       continue;
     }
     if (record.data.type === "event_msg") {
+      activity.event(record.data.payload, line, session.sourceSessionId);
       const count = tokenEvent.safeParse(record.data.payload);
       if (!count.success || count.data.info == null) continue;
       throughLine = line;
@@ -122,6 +125,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       continue;
     }
     if (record.data.type !== "response_item") continue;
+    activity.response(record.data.payload, line);
 
     const message = messageRecord.safeParse(record.data.payload);
     if (!message.success) continue;
@@ -130,10 +134,14 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
     if (!content.success || !timestamp.success) throw new Error(`Invalid Codex message at line ${line}.`);
 
     const expectedType = message.data.role === "user" ? "input_text" : "output_text";
-    const parts = content.data.content.flatMap((item) => {
+    const parts = content.data.content.flatMap((item, index) => {
       const part = textPart.safeParse(item);
       if (!part.success || part.data.type !== expectedType) return [];
-      if (message.data.role === "user" && codexContext.test(part.data.text.trimStart())) return [];
+      if (message.data.role === "user" && codexContext.test(part.data.text.trimStart())) {
+        activity.skill(part.data.text, line, index);
+        if (part.data.text.trimStart().startsWith("<skill")) throughLine = line;
+        return [];
+      }
       return [part.data.text];
     });
     const text = parts.join("\n");
@@ -149,9 +157,10 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
 
   if (lastPromptLine > lastUsageLine) usage.markIncomplete();
   const analytics = usage.snapshot(throughLine);
+  const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics } };
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity } };
     }
     return;
   }
@@ -159,5 +168,5 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   if (!session || events.length === 0) {
     throw new Error("The file must contain one Codex session with readable conversation text.");
   }
-  return { ...session, events, analytics };
+  return { ...session, events, analytics, activity: sessionActivity };
 }

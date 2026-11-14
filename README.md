@@ -45,7 +45,7 @@ The importer accepts a single Codex or Claude Code JSONL file up to 1 MiB. It se
 
 ## Sync new Codex and Claude Code sessions
 
-From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text and, when available, the repository name, model IDs, and token counts. It redacts common credential patterns in messages. Local paths, remote URLs, tool records, and attachments stay on your machine. Conversation text can still contain sensitive information.
+From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text, repository and model information, token counts, and activity metadata when available. It redacts common credential patterns in messages. Raw tool arguments and results, skill instructions, child agent transcripts, repository paths, remote URLs, and attachments stay on your machine. Conversation text can still contain sensitive information.
 
 ```sh
 bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup \
@@ -64,6 +64,10 @@ To preview a manual Claude Code import, pass `--source claude-code` to the impor
 Open your private workspace to see reported tokens and estimated cost across sessions, repositories, and models. Open a session to see its own breakdown. Token totals include reported input, cache reads and writes, and output. Cost estimates apply standard API token rates in USD. Subscription charges, discounts, and special rates can differ. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 
 **Partial** shows the subtotal Tideline can count or price. **Unavailable** means the session lacks the data needed for that number. A session counts once in the workspace totals and once on each model row that it used. Older sessions may have only conversation text.
+
+## Read session activity
+
+Open a session to see tool calls, reported skill use, and child agent runs. **Returned** means a tool produced a result. A child run can stay **Running** after its launch tool returns. Tideline uses the parent session log and shows the latest status it can confirm. Each session includes up to 250 entries per activity category. Workspace totals show activity from sessions that have synced it.
 
 | Workspace | Current entry point |
 | --- | --- |

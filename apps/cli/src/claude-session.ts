@@ -1,6 +1,7 @@
 import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import type { ModelTokens } from "@tideline/contracts";
 import { z } from "zod";
+import { createClaudeActivity } from "./claude-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
 import { createModelUsage, readModelId } from "./session-usage";
@@ -18,6 +19,11 @@ const claudeRecord = z.object({
   userType: z.string().optional(),
   toolUseResult: z.unknown().optional(),
   sourceToolAssistantUUID: z.unknown().optional(),
+  origin: z.object({ kind: z.string().optional() }).nullish().catch(undefined),
+  attributionSkill: z.unknown().optional(),
+  uuid: z.unknown().optional(),
+  parentUuid: z.unknown().optional(),
+  turnCompanion: z.boolean().optional().catch(undefined),
   message: z.unknown().optional(),
 });
 const claudeMessage = z.object({
@@ -87,6 +93,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const projectScope = createProjectScope(options?.projectDirectory);
   let projectDirectory: string | undefined;
   const usage = createModelUsage();
+  const activity = createClaudeActivity();
   const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null }>();
   let throughLine = 0;
 
@@ -111,10 +118,20 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     }
     session ??= { source: "claude-code", sourceSessionId: id.data, startedAt: at.data };
 
-    if (record.isMeta || record.isCompactSummary || record.isSynthetic || record.toolUseResult !== undefined ||
-      record.sourceToolAssistantUUID !== undefined || (record.userType && record.userType !== "external")) continue;
+    if (record.isCompactSummary || record.isSynthetic || (record.userType && record.userType !== "external")) continue;
+    if (record.isMeta) {
+      if (record.type === "user" && record.turnCompanion) activity.observeSlashCompanion(record.parentUuid);
+      continue;
+    }
     const message = claudeMessage.safeParse(record.message);
     if (!message.success || message.data.role !== record.type || message.data.model === "<synthetic>") continue;
+
+    const isTaskNotification = record.origin?.kind === "task-notification";
+    activity.observe({
+      line, role: message.data.role, content: message.data.content, metadata: record.toolUseResult,
+      isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid,
+    });
+    if (record.toolUseResult !== undefined || record.sourceToolAssistantUUID !== undefined || isTaskNotification) continue;
 
     if (message.data.role === "assistant") {
       throughLine = line;
@@ -170,9 +187,10 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     if (!tokens) usage.markIncomplete();
   }
   const analytics = usage.snapshot(throughLine);
+  const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics } };
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity } };
     }
     return;
   }
@@ -180,5 +198,5 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   if (!session || events.length === 0) {
     throw new Error("The file must contain one Claude Code session with readable conversation text.");
   }
-  return { ...session, events, analytics };
+  return { ...session, events, analytics, activity: sessionActivity };
 }

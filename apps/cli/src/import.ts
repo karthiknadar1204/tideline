@@ -42,6 +42,10 @@ export async function importSession(file: string, options: ImportOptions) {
   if (session.analytics?.models.length) {
     process.stdout.write("The file also contains model metadata. Tideline includes token counts where the agent reports them.\n");
   }
+  const activity = session.activity;
+  if (activity && (activity.tools.length || activity.skills.length || activity.children.length)) {
+    process.stdout.write(`Activity recorded: ${activity.tools.length} tool calls, ${activity.skills.length} skill entries, and ${activity.children.length} child agent runs.\n`);
+  }
 
   if (options.dryRun) {
     process.stdout.write("Dry run complete. No data was sent.\n");

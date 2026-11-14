@@ -99,6 +99,9 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         queued_at INTEGER NOT NULL
       );
     `);
+    if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'projection'").get()) {
+      db.exec("ALTER TABLE uploads ADD COLUMN projection INTEGER NOT NULL DEFAULT 1");
+    }
   } catch (error) {
     db.close();
     writer?.close();
@@ -115,15 +118,15 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       db.prepare("INSERT INTO config (id, value) VALUES (1, ?)").run(JSON.stringify(config));
     },
     queue(upload: {
-      sessionKey: string; fingerprint: string; messageCount: number; tailLine: number; body: string;
+      sessionKey: string; fingerprint: string; messageCount: number; tailLine: number; body: string; projection: 1 | 2;
     }) {
       const existing = db.prepare(
-        "SELECT fingerprint, message_count, tail_line FROM uploads WHERE session_key = ?",
+        "SELECT fingerprint, message_count, tail_line, projection FROM uploads WHERE session_key = ?",
       ).get(upload.sessionKey);
       if (existing && (
         existing.fingerprint === upload.fingerprint ||
-        upload.messageCount < Number(existing.message_count) ||
-        (upload.messageCount === Number(existing.message_count) && upload.tailLine < Number(existing.tail_line))
+        upload.tailLine < Number(existing.tail_line) ||
+        (upload.projection <= Number(existing.projection) && upload.messageCount < Number(existing.message_count))
       )) return "unchanged";
 
       const queued = db.prepare(
@@ -132,12 +135,13 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       if (Number(queued?.bytes ?? 0) + Buffer.byteLength(upload.body) > maximumQueueBytes) return "full";
 
       db.prepare(`
-        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at)
-        VALUES (?, ?, ?, ?, 'queued', ?, ?)
+        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at, projection)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
         ON CONFLICT (session_key) DO UPDATE SET
           fingerprint = excluded.fingerprint, message_count = excluded.message_count,
-          tail_line = excluded.tail_line, phase = 'queued', body = excluded.body, queued_at = excluded.queued_at
-      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now());
+          tail_line = excluded.tail_line, phase = 'queued', body = excluded.body, queued_at = excluded.queued_at,
+          projection = excluded.projection
+      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now(), upload.projection);
       return "queued";
     },
     pending() {

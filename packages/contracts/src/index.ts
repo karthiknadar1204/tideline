@@ -51,6 +51,46 @@ const sessionAnalytics = z.strictObject({
   { path: ["tokenCoverage"], message: "Token coverage must reflect whether usage was reported." },
 );
 
+export const MAX_SESSION_ACTIVITY_ITEMS = 250;
+export const activityName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/);
+export const codexSkillInstructions = /^<skill>\r?\n<name>([^\r\n<>]+)<\/name>\r?\n<path>[^\r\n<>]+<\/path>[\s\S]*?\r?\n<\/skill>$/u;
+export const codexSkillCatalog = /^<skills_instructions>[^]*<\/skills_instructions>$/u;
+const activityLocation = z.strictObject({ line: z.int().positive(), index: z.int().nonnegative() });
+
+function activityRows<T extends z.ZodType>(row: T) {
+  return z.array(row).max(MAX_SESSION_ACTIVITY_ITEMS);
+}
+
+const activityDetail = z.strictObject({
+  truncated: z.boolean(),
+  tools: activityRows(activityLocation.extend({
+    name: activityName,
+    status: z.enum(["called", "returned", "failed"]),
+  })),
+  skills: activityRows(activityLocation.extend({
+    name: activityName,
+    status: z.enum(["invoked", "requested", "failed"]),
+  })),
+  children: activityRows(activityLocation.extend({
+    name: activityName.nullable(),
+    status: z.enum(["started", "running", "completed", "failed", "stopped", "unknown"]),
+  })),
+});
+
+const sessionActivity = activityDetail.extend({ throughLine: z.int().positive() }).refine((activity) => (
+  [activity.tools, activity.skills, activity.children].every((rows) =>
+    rows.every(({ line }) => line <= activity.throughLine) &&
+    new Set(rows.map(({ line, index }) => `${line}:${index}`)).size === rows.length,
+  )
+), { message: "Activity locations must be unique and covered by the source cursor." });
+
+const activityCounts = z.strictObject({
+  tools: z.int().min(0).max(MAX_SESSION_ACTIVITY_ITEMS),
+  skills: z.int().min(0).max(MAX_SESSION_ACTIVITY_ITEMS),
+  children: z.int().min(0).max(MAX_SESSION_ACTIVITY_ITEMS),
+  truncated: z.boolean(),
+});
+
 const conversationMessage = z.strictObject({
   role: z.enum(["user", "assistant"]),
   text: z.string().trim().min(1).max(32_000).refine(
@@ -73,9 +113,13 @@ export const sessionImportRequest = z.strictObject({
       { message: "Messages must be in source line order." },
     ),
     analytics: sessionAnalytics.optional(),
+    activity: sessionActivity.optional(),
   }).refine(
     ({ analytics, events }) => !analytics || analytics.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["analytics", "throughLine"], message: "Analytics must cover the last conversation message." },
+  ).refine(
+    ({ activity, events }) => !activity || activity.throughLine >= (events.at(-1)?.line ?? 0),
+    { path: ["activity", "throughLine"], message: "Activity must cover the last conversation message." },
   ),
 });
 
@@ -90,6 +134,7 @@ const sessionSummaryResponse = z.strictObject({
   startedAt: z.iso.datetime(),
   title: z.string().min(1).max(100),
   messageCount: z.int().positive(),
+  activityCounts: activityCounts.nullable(),
   analytics: z.strictObject({
     repository: repository.nullable(),
     tokenCoverage,
@@ -103,6 +148,7 @@ export const sessionSummariesResponse = z.array(sessionSummaryResponse);
 export const sessionDetailResponse = sessionSummaryResponse.extend({
   sourceSessionId: z.uuid(),
   messages: z.array(conversationMessage).min(1).max(MAX_CODEX_IMPORT_EVENTS),
+  activity: activityDetail.nullable(),
 });
 
 export const syncEnrollmentRequest = z.strictObject({
@@ -119,6 +165,7 @@ export type SessionImportRequest = z.infer<typeof sessionImportRequest>;
 export type CodexImportRequest = z.input<typeof sessionImportRequest>;
 export type SessionSource = z.infer<typeof sessionSource>;
 export type SessionAnalytics = z.infer<typeof sessionAnalytics>;
+export type SessionActivity = z.infer<typeof sessionActivity>;
 export type ModelTokens = z.infer<typeof modelTokens>;
 export type SessionSummary = z.infer<typeof sessionSummaryResponse>;
 export type SessionDetail = z.infer<typeof sessionDetailResponse>;

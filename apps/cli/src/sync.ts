@@ -82,7 +82,7 @@ export async function setupSync(options: SetupOptions) {
   const workspace = syncEnrollmentRequest.shape.workspaceId.safeParse(options.workspace);
   if (!workspace.success) throw new Error("Set --workspace to the destination workspace UUID.");
   if (!options.conversations) {
-    throw new Error("Pass --conversations to approve syncing conversations and session analytics from this project.");
+    throw new Error("Pass --conversations to approve syncing conversations, usage, and activity from this project.");
   }
   if (process.platform === "win32") {
     throw new Error("Tideline automatic sync currently requires macOS or Linux.");
@@ -103,6 +103,7 @@ export async function setupSync(options: SetupOptions) {
     const roots = await Promise.all([bindRoot(codexRoot), bindRoot(claudeRoot)]);
     console.info(`Syncing new Codex and Claude Code conversations from ${projectDirectory} to workspace ${workspace.data} at ${apiOrigin}.`);
     console.info("The collector sends user and assistant text, source references, times, Git repository names and identifiers, models, and token counts. Common credentials in text are redacted.");
+    console.info("Activity includes tool, skill, and child agent names and statuses.");
     if (credentialStore === "file") console.info("The sync credential will be stored in an owner-only local file.");
 
     const accessToken = await approveInBrowser(options.browser);
@@ -232,7 +233,8 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
       sessionKey: `${source}:${session.sourceSessionId}`,
       fingerprint: createHash("sha256").update(body).digest("hex"),
       messageCount: session.events.length,
-      tailLine: session.analytics?.throughLine ?? lastMessage.line,
+      tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0),
+      projection: session.activity ? 2 : 1,
       body,
     });
     if (phase === "full") {

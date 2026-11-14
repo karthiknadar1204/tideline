@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SessionImportRequest } from "@tideline/contracts";
+import { codexSkillCatalog, codexSkillInstructions } from "@tideline/contracts";
+import type { SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -7,16 +8,33 @@ import postgres from "postgres";
 import { agentSessions, syncGrants } from "./schema";
 
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
+type Messages = SessionImportRequest["session"]["events"];
+
+function withoutLegacySkillContext(messages: Messages) {
+  return messages.filter(({ role, text }) => role !== "user" ||
+    (!codexSkillInstructions.test(text) && !codexSkillCatalog.test(text)));
+}
+
+function countActivity(activity: SessionActivity | null): SessionSummary["activityCounts"] {
+  return activity && {
+    tools: activity.tools.length,
+    skills: activity.skills.length,
+    children: activity.children.length,
+    truncated: activity.truncated,
+  };
+}
 
 async function receiveSession(
   transaction: Transaction,
   { workspaceId, session }: SessionImportRequest,
   allowAppend: boolean,
 ) {
-  const { source, sourceSessionId, startedAt, events: messages, analytics } = session;
+  const { source, sourceSessionId, startedAt, events, analytics, activity } = session;
+  const messages = source === "codex" ? withoutLegacySkillContext(events) : events;
+  if (!messages.length) return null;
   const [created] = await transaction
     .insert(agentSessions)
-    .values({ workspaceId, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics })
+    .values({ workspaceId, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity })
     .onConflictDoNothing({ target: [agentSessions.workspaceId, agentSessions.source, agentSessions.sourceSessionId] })
     .returning({ id: agentSessions.id });
 
@@ -29,6 +47,7 @@ async function receiveSession(
     startedAt: agentSessions.startedAt,
     messages: agentSessions.messages,
     analytics: agentSessions.pendingAnalytics,
+    activity: agentSessions.pendingActivity,
   }).from(agentSessions).where(and(
     eq(agentSessions.workspaceId, workspaceId),
     eq(agentSessions.source, source),
@@ -39,11 +58,14 @@ async function receiveSession(
     throw new Error("Import record disappeared before it could be checked.");
   }
 
-  const lengthDifference = messages.length - existing.messages.length;
-  const sharedMessageCount = Math.min(messages.length, existing.messages.length);
+  const priorMessages = source === "codex" && activity && !existing.activity
+    ? withoutLegacySkillContext(existing.messages) : existing.messages;
+  const removesLegacyContext = priorMessages.length !== existing.messages.length;
+  const lengthDifference = messages.length - priorMessages.length;
+  const sharedMessageCount = Math.min(messages.length, priorMessages.length);
   if (existing.startedAt !== startedAt ||
       (!allowAppend && lengthDifference !== 0) ||
-      !isDeepStrictEqual(existing.messages.slice(0, sharedMessageCount), messages.slice(0, sharedMessageCount))) {
+      !isDeepStrictEqual(priorMessages.slice(0, sharedMessageCount), messages.slice(0, sharedMessageCount))) {
     return null;
   }
 
@@ -53,23 +75,31 @@ async function receiveSession(
   const previousLine = existing.analytics?.throughLine ?? 0;
   const nextLine = analytics?.throughLine ?? 0;
   const repositoryEnrichment = analytics?.repository && !existing.analytics?.repository;
+  const correctsLegacyCoverage = removesLegacyContext && isDeepStrictEqual(existing.analytics?.models, analytics?.models);
+  const legacyContextReplay = source === "codex" && !activity && events.length !== messages.length;
+  let analyticsUpdate = analytics;
   if (analytics && nextLine <= previousLine) {
     if (lengthDifference > 0 || (nextLine === previousLine && (
-      existing.analytics?.tokenCoverage !== analytics.tokenCoverage ||
-      !isDeepStrictEqual(existing.analytics?.models, analytics.models)
+      !isDeepStrictEqual(existing.analytics?.models, analytics.models) ||
+      (existing.analytics?.tokenCoverage !== analytics.tokenCoverage && !correctsLegacyCoverage && !legacyContextReplay)
     ))) {
       return null;
     }
-    if (nextLine < previousLine || !repositoryEnrichment) return replay;
+    if (nextLine < previousLine || (!repositoryEnrichment && !correctsLegacyCoverage)) analyticsUpdate = undefined;
   }
-  if (lengthDifference === 0 && !analytics) return replay;
+  const previousActivityLine = existing.activity?.throughLine ?? 0;
+  if (activity?.throughLine === previousActivityLine && !isDeepStrictEqual(existing.activity, activity)) return null;
+  const activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
+  if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate) return replay;
 
   await transaction.update(agentSessions)
     .set({
-      messages: lengthDifference > 0 ? messages : undefined,
-      pendingAnalytics: analytics && {
-        ...analytics, repository: existing.analytics?.repository ?? analytics.repository,
+      messages: lengthDifference > 0 || removesLegacyContext ? messages : undefined,
+      readyMessageCount: removesLegacyContext ? 0 : undefined,
+      pendingAnalytics: analyticsUpdate && {
+        ...analyticsUpdate, repository: existing.analytics?.repository ?? analyticsUpdate.repository,
       },
+      pendingActivity: activityUpdate,
     })
     .where(eq(agentSessions.id, existing.id));
 
@@ -87,6 +117,13 @@ export function createSessionStore(databaseUrl: string) {
     messageCount: agentSessions.readyMessageCount,
     analytics: agentSessions.readyAnalytics,
   };
+  const activityCounts = sql<SessionSummary["activityCounts"]>`case when ${agentSessions.readyActivity} is not null then
+    jsonb_build_object(
+      'tools', jsonb_array_length(${agentSessions.readyActivity} -> 'tools'),
+      'skills', jsonb_array_length(${agentSessions.readyActivity} -> 'skills'),
+      'children', jsonb_array_length(${agentSessions.readyActivity} -> 'children'),
+      'truncated', ${agentSessions.readyActivity} -> 'truncated'
+    ) else null end`;
 
   return {
     async receive(request: SessionImportRequest) {
@@ -130,7 +167,7 @@ export function createSessionStore(databaseUrl: string) {
     },
 
     async listReady(workspaceId: string) {
-      return db.select(summaryFields).from(agentSessions)
+      return db.select({ ...summaryFields, activityCounts }).from(agentSessions)
         .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0)))
         .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id));
     },
@@ -138,6 +175,7 @@ export function createSessionStore(databaseUrl: string) {
     async findReady(workspaceId: string, sessionId: string) {
       const [session] = await db.select({
         ...summaryFields,
+        activity: agentSessions.readyActivity,
         sourceSessionId: agentSessions.sourceSessionId,
         messages: agentSessions.messages,
       }).from(agentSessions).where(and(
@@ -146,7 +184,16 @@ export function createSessionStore(databaseUrl: string) {
         gt(agentSessions.readyMessageCount, 0),
       ));
 
-      return session && { ...session, messages: session.messages.slice(0, session.messageCount) };
+      if (!session) return;
+      const { activity, messages, ...summary } = session;
+      return {
+        ...summary,
+        activityCounts: countActivity(activity),
+        activity: activity && {
+          truncated: activity.truncated, tools: activity.tools, skills: activity.skills, children: activity.children,
+        },
+        messages: messages.slice(0, session.messageCount),
+      };
     },
 
     async processNext() {
@@ -156,12 +203,15 @@ export function createSessionStore(databaseUrl: string) {
           source: agentSessions.source,
           messages: agentSessions.messages,
           analytics: agentSessions.pendingAnalytics,
+          activity: agentSessions.pendingActivity,
         }).from(agentSessions)
           .where(sql`${agentSessions.readyMessageCount} < jsonb_array_length(${agentSessions.messages})
             or (${agentSessions.pendingAnalytics} ->> 'throughLine')
               is distinct from (${agentSessions.readyAnalytics} ->> 'throughLine')
             or (${agentSessions.pendingAnalytics} -> 'repository' ->> 'key')
-              is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')`)
+              is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')
+            or (${agentSessions.pendingActivity} ->> 'throughLine')
+              is distinct from (${agentSessions.readyActivity} ->> 'throughLine')`)
           .orderBy(asc(agentSessions.receivedAt), asc(agentSessions.id))
           .limit(1)
           .for("update", { skipLocked: true });
@@ -178,7 +228,7 @@ export function createSessionStore(databaseUrl: string) {
           : analytics;
 
         await transaction.update(agentSessions)
-          .set({ title, readyMessageCount: pending.messages.length, readyAnalytics })
+          .set({ title, readyMessageCount: pending.messages.length, readyAnalytics, readyActivity: pending.activity })
           .where(eq(agentSessions.id, pending.id));
 
         return pending.id;
