@@ -57,7 +57,7 @@ function BreakdownTable({
   );
 }
 
-function UsageCards({ label, value, usage }: { label: string; value: string; usage: Usage }) {
+export function UsageCards({ label, value, usage }: { label: string; value: string; usage: Usage }) {
   return (
     <dl className="grid gap-3 sm:grid-cols-3">
       <div className="min-w-0 space-y-2 rounded-lg border border-current/15 p-4">
@@ -76,21 +76,15 @@ function UsageCards({ label, value, usage }: { label: string; value: string; usa
   );
 }
 
-export function WorkspaceUsage({ sessions }: { sessions: SessionSummary[] }) {
-  const usage = summarizeWorkspace(sessions);
+export function UsageBreakdown({ usage }: { usage: ReturnType<typeof summarizeWorkspace> }) {
   return (
-    <section className="mt-10 space-y-4" aria-labelledby="usage-overview">
-      <h2 id="usage-overview" className="text-xl font-semibold">Usage overview</h2>
-      <UsageCards label="Sessions" value={formatCount(sessions.length)} usage={usage.total} />
-      {sessions.length > 0 && (
-        <>
-          <p className="text-sm opacity-75">Cost estimates use standard API token rates. Partial totals include the usage Tideline can count or price.</p>
-          <div className="grid items-start gap-6 lg:grid-cols-2">
-            <BreakdownTable heading="Repositories" headingId="repositories" label="Repository" rows={usage.repositories} />
-            <BreakdownTable heading="Models" headingId="models" label="Model" rows={usage.models} />
-          </div>
-        </>
-      )}
+    <section className="space-y-4" aria-labelledby="usage-breakdown">
+      <h2 id="usage-breakdown" className="text-xl font-semibold">Usage breakdown</h2>
+      <p className="text-sm opacity-75">Cost estimates use standard API token rates. Partial totals include the usage Tideline can count or price.</p>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <BreakdownTable heading="Repositories" headingId="repositories" label="Repository" rows={usage.repositories} />
+        <BreakdownTable heading="Models" headingId="models" label="Model" rows={usage.models} />
+      </div>
     </section>
   );
 }

@@ -59,7 +59,7 @@ You can also open the picker with `upload`, `connect`, `enable`, or `disable`. T
 
 To select paths without the picker, pass `--project /path/to/first /path/to/second --conversations`. Add `--history` to import older sessions and `--background` to start sync immediately. Use `sync start` and `sync stop` to control the background collector. It stays running after the terminal closes. Run `sync start` again after a reboot or if the process exits. Use `sync run` to watch in the current terminal, `sync status` to check upload counts, or `sync revoke` to end this collector’s authorization.
 
-Tideline checks local session files and databases about every two seconds. The dashboard refreshes its session list every five seconds and shows each session’s original date. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Discovery counts can include sessions that exceed these limits or lack enough data to import. The collector sends conversation text and available metadata. Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Tideline redacts common credential patterns in messages.
+Tideline checks local session files and databases about every two seconds. The dashboard refreshes its recent sessions every five seconds and shows each session’s original date. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Discovery counts can include sessions that exceed these limits or lack enough data to import. The collector sends conversation text and available metadata. Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Tideline redacts common credential patterns in messages.
 
 The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and `archived_sessions` in the same home directory. It reads Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. For Cursor, it reads local IDE SQLite storage under `~/Library/Application Support/Cursor/User` on macOS or `${XDG_CONFIG_HOME:-~/.config}/Cursor/User` on Linux. Use `TIDELINE_CURSOR_USER_DIR` to select a different Cursor User directory. OpenCode uses SQLite under `${XDG_DATA_HOME:-~/.local/share}/opencode`. If OpenCode uses a custom database file, set the same `OPENCODE_DB` when running setup.
 
@@ -83,15 +83,19 @@ bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sql 'SELECT source, cou
 
 `sql` runs one read-only `SELECT` or `WITH` query in local SQLite. Its tables are `sessions`, `messages`, `models`, `activity`, `commits`, and `safety_findings`. It prints JSONL by default. Use `--out` with a new `.jsonl` or `.csv` file to save results. Scope larger queries with a repository, source, or date range.
 
-## Read the usage summaries
+## Find a session
 
-Open your private workspace to see reported tokens and estimated cost across sessions, repositories, and models. Open a session to see its own breakdown. Token totals include reported input, cache reads and writes, and output. Cost estimates apply standard API token rates in USD. Subscription charges, discounts, and special rates can differ. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+In **Sessions**, search by title or by a phrase from a processed conversation. Filter by agent and repository. Open **More filters** to select a model or a range of UTC start dates. **Back to sessions** returns you to the same results after you read a conversation.
+
+## Run a usage report
+
+Open **Reports** to see session activity, reported tokens, and estimated cost by repository and model. Choose a time period, agent, or repository, then select **Apply**. **Download CSV** exports counts and usage for the chosen filters. Open a session to see its own breakdown. Token totals include reported input, cache reads and writes, and output. Cost estimates apply standard API token rates in USD. Subscription charges, discounts, and special rates can differ. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 
 **Partial** shows the subtotal Tideline can count or price. **Unavailable** means the session lacks the data needed for that number. A session counts once in the workspace totals and once on each model row that it used. Older sessions may have only conversation text.
 
-## Set a usage budget or goal
+## Manage workspace settings
 
-In your private workspace, set a monthly estimated spend budget in USD. Tideline marks a budget as near its limit at 80%, reached at 100%, and over budget above 100%. You can also set a weekly or monthly goal for reported tokens or estimated spend. Choose an upper limit or a minimum target, then apply it to all agents or to one agent.
+Open **Settings** to rename the workspace or copy the CLI sync command. Set a monthly estimated spend budget in USD. Tideline marks a budget as near its limit at 80%, reached at 100%, and over budget above 100%. You can also set a weekly or monthly goal for reported tokens or estimated spend. Choose an upper limit or a minimum target, then apply it to all agents or to one agent.
 
 Periods use UTC. Weeks start on Monday. Tideline assigns a session's usage to the period in which the session started. The dashboard updates as sessions sync. If usage data is incomplete, Tideline shows the known amount and marks outcomes it cannot establish as partial or unavailable. Budgets and goals are advisory.
 

@@ -22,7 +22,7 @@ const statusLabel: Record<TargetProgress["status"], string> = {
 
 const agentLabel: Record<UsageGoal["scope"], string> = { all: "All agents", ...sessionSourceLabel };
 const periodDate = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
-const progressTrack = "block h-2 w-full appearance-none overflow-hidden rounded-full bg-current/10 [&::-webkit-progress-bar]:bg-transparent [&::-webkit-progress-value]:bg-current [&::-moz-progress-bar]:bg-current";
+const progressTrack = "block h-2 w-full appearance-none overflow-hidden rounded-full bg-[var(--workspace-subtle)] [&::-webkit-progress-bar]:bg-transparent [&::-webkit-progress-value]:bg-[var(--workspace-accent)] [&::-moz-progress-bar]:bg-[var(--workspace-accent)]";
 
 function ProgressSummary({ name, progress, format }: {
   name: string;
@@ -59,17 +59,17 @@ export function UsageTargets({ workspaceId, targets, sessions }: {
   const { budget, goal } = calculateUsageTargets(sessions, targets);
 
   return (
-    <div className="mt-10 space-y-3">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section aria-labelledby="usage-budget" className="min-w-0 space-y-4 rounded-lg border border-current/15 p-4">
-          <h2 id="usage-budget" className="text-xl font-semibold">Usage budget</h2>
+    <div className="space-y-3">
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <section aria-labelledby="usage-budget" className="min-w-0 space-y-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] p-4 sm:p-5">
+          <h2 id="usage-budget" className="font-semibold">Usage budget</h2>
           {budget ? <ProgressSummary name="Monthly budget progress" progress={budget} format={formatCost} /> : (
             <p className="text-sm opacity-75">Set a monthly limit for estimated spend across all agents.</p>
           )}
           <UsageBudgetForm key={targets.monthlyBudgetCents ?? "unset"} workspaceId={workspaceId} cents={targets.monthlyBudgetCents} />
         </section>
-        <section aria-labelledby="usage-goal" className="min-w-0 space-y-4 rounded-lg border border-current/15 p-4">
-          <h2 id="usage-goal" className="text-xl font-semibold">Usage goal</h2>
+        <section aria-labelledby="usage-goal" className="min-w-0 space-y-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] p-4 sm:p-5">
+          <h2 id="usage-goal" className="font-semibold">Usage goal</h2>
           {goal && targets.goal ? (
             <>
               <p className="text-sm opacity-75">{agentLabel[targets.goal.scope]} · {targets.goal.period === "week" ? "Weekly" : "Monthly"} · {targets.goal.direction === "at-most" ? "At most" : "At least"}</p>

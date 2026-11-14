@@ -13,6 +13,8 @@ html {
   --workspace-muted: #52615c;
   --workspace-accent: #235d4c;
   --workspace-accent-soft: #e7f0eb;
+  --workspace-button: #235d4c;
+  --workspace-button-text: #fff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -25,5 +27,7 @@ html {
     --workspace-muted: #a9bcb4;
     --workspace-accent: #a3d4c1;
     --workspace-accent-soft: #263e34;
+    --workspace-button: #a3d4c1;
+    --workspace-button-text: #142a21;
   }
 }

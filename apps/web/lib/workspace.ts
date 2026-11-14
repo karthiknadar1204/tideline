@@ -3,10 +3,12 @@ import {
   sessionDetailResponse,
   sessionSummariesResponse,
   workspaceResponse,
+  workspaceSessionSearchResponse,
   workspaceUsageTargets,
 } from "@tideline/contracts";
-import type { WorkspaceUsageTargetUpdate } from "@tideline/contracts";
+import type { WorkspaceNameUpdate, WorkspaceSessionSearchQuery, WorkspaceUsageTargetUpdate } from "@tideline/contracts";
 import { notFound, redirect } from "next/navigation";
+import { sessionFilterParams } from "./session-filters";
 
 async function fetchWorkspaceResource(path: string, options: RequestInit = {}) {
   const { getToken } = await auth.protect();
@@ -52,6 +54,13 @@ export async function listWorkspaceSessions(workspaceId: string) {
   );
 }
 
+export async function searchWorkspaceSessions(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
+  const params = sessionFilterParams(filters).toString();
+  return workspaceSessionSearchResponse.parse(
+    await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/session-search${params ? `?${params}` : ""}`),
+  );
+}
+
 export async function readWorkspaceUsageTargets(workspaceId: string) {
   return workspaceUsageTargets.parse(
     await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/usage-targets`),
@@ -73,4 +82,15 @@ export async function readWorkspaceSession(workspaceId: string, sessionId: strin
       `${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}`,
     ),
   );
+}
+
+export async function updateWorkspaceName(workspaceId: string, input: WorkspaceNameUpdate) {
+  const response = await fetchWorkspaceResource(encodeURIComponent(workspaceId), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response?.ok) return;
+  const result = workspaceResponse.safeParse(await response.json().catch(() => null));
+  return result.data;
 }

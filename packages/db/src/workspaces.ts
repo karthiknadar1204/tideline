@@ -46,6 +46,14 @@ export function createWorkspaceStore(databaseUrl: string) {
       return workspace;
     },
 
+    async renameOwned(owner: WorkspaceOwner, name: string) {
+      const [workspace] = await db.update(workspaces)
+        .set({ name })
+        .where(ownedWorkspace(owner))
+        .returning(workspaceFields);
+      return workspace;
+    },
+
     async readUsageTargets(owner: WorkspaceOwner): Promise<WorkspaceUsageTargets | undefined> {
       const [targets] = await db.select(usageTargetFields).from(workspaces).where(ownedWorkspace(owner));
       return targets;

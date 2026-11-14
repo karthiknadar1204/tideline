@@ -13,6 +13,11 @@ export const workspaceResponse = z.object({
 
 export type WorkspaceResponse = z.infer<typeof workspaceResponse>;
 
+export const workspaceNameUpdate = z.strictObject({
+  name: z.string().trim().min(1).max(80).refine((name) => !/\p{Cc}/u.test(name)),
+});
+export type WorkspaceNameUpdate = z.infer<typeof workspaceNameUpdate>;
+
 export const MAX_CODEX_IMPORT_BYTES = 1_048_576;
 export const MAX_CODEX_IMPORT_EVENTS = 500;
 
@@ -269,6 +274,28 @@ export const cliSessionPageResponse = z.strictObject({
   nextCursor: z.uuid().nullable(),
 });
 
+export const WORKSPACE_SESSION_PAGE_SIZE = 25;
+
+export const workspaceSessionSearchQuery = z.strictObject({
+  query: z.string().trim().max(200).refine((query) => !query.includes("\0"))
+    .transform((query) => query || undefined).optional(),
+  source: sessionSource.optional(),
+  repository: repository.shape.key.optional(),
+  model: modelId.optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  page: z.union([z.int(), z.string().regex(/^[1-9][0-9]*$/).transform(Number)])
+    .pipe(z.int().positive()).default(1),
+}).refine(validDateRange);
+
+export const workspaceSessionSearchResponse = z.strictObject({
+  sessions: sessionSummariesResponse.max(WORKSPACE_SESSION_PAGE_SIZE),
+  total: z.int().nonnegative(),
+  page: z.int().positive(),
+  repositories: z.array(repository),
+  models: z.array(modelId),
+});
+
 export const codexImportRequest = sessionImportRequest;
 export type SessionImportRequest = z.infer<typeof sessionImportRequest>;
 export type CodexImportRequest = z.input<typeof sessionImportRequest>;
@@ -282,3 +309,5 @@ export type SessionSummary = z.infer<typeof sessionSummaryResponse>;
 export type SessionDetail = z.infer<typeof sessionDetailResponse>;
 export type CliAccount = z.infer<typeof cliAccountResponse>;
 export type CliSessionListQuery = z.infer<typeof cliSessionListQuery>;
+export type WorkspaceSessionSearchQuery = z.infer<typeof workspaceSessionSearchQuery>;
+export type WorkspaceSessionSearchResponse = z.infer<typeof workspaceSessionSearchResponse>;

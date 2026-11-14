@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel } from "@tideline/contracts";
-import type { CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
-import { and, asc, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
+import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
+import type { CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary, WorkspaceSessionSearchQuery } from "@tideline/contracts";
+import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -197,6 +197,52 @@ export function createSessionStore(databaseUrl: string) {
       return db.select({ ...summaryFields, activityCounts }).from(agentSessions)
         .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0)))
         .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id));
+    },
+
+    async searchReady(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
+      const ready = and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0));
+      const repositoryKey = sql<string>`${agentSessions.readyAnalytics} -> 'repository' ->> 'key'`;
+      const repositoryName = sql<string>`${agentSessions.readyAnalytics} -> 'repository' ->> 'name'`;
+      const models = sql`jsonb_array_elements(${agentSessions.readyAnalytics} -> 'models')`;
+      const availableModel = sql<string>`available_models.value ->> 'model'`;
+      const sessionDay = sql`left(${agentSessions.startedAt}, 10)`;
+      const matches = and(
+        ready,
+        filters.source === undefined ? undefined : eq(agentSessions.source, filters.source),
+        filters.repository === undefined ? undefined : eq(repositoryKey, filters.repository),
+        filters.model === undefined ? undefined : sql`exists (
+          select 1 from ${models} as filter_models(value) where filter_models.value ->> 'model' = ${filters.model}
+        )`,
+        filters.from === undefined ? undefined : gte(sessionDay, filters.from),
+        filters.to === undefined ? undefined : lte(sessionDay, filters.to),
+        filters.query === undefined ? undefined : sql`(
+          strpos(lower(${agentSessions.title}), lower(${filters.query})) > 0
+          or exists (
+            select 1 from jsonb_array_elements(${agentSessions.messages}) with ordinality as entry(message, position)
+            where entry.position <= ${agentSessions.readyMessageCount}
+              and entry.message ->> 'role' in ('user', 'assistant')
+              and strpos(lower(entry.message ->> 'text'), lower(${filters.query})) > 0
+          )
+        )`,
+      );
+
+      return db.transaction(async (transaction) => {
+        const [[totals], repositories, modelRows] = await Promise.all([
+          transaction.select({ total: count() }).from(agentSessions).where(matches),
+          transaction.select({ key: repositoryKey, name: sql<string>`min(${repositoryName})` }).from(agentSessions)
+            .where(and(ready, isNotNull(repositoryKey), isNotNull(repositoryName)))
+            .groupBy(repositoryKey).orderBy(asc(sql`min(${repositoryName})`), asc(repositoryKey)),
+          transaction.selectDistinct({ model: availableModel }).from(agentSessions)
+            .crossJoinLateral(sql`${models} as available_models(value)`)
+            .where(and(ready, isNotNull(availableModel))).orderBy(asc(availableModel)),
+        ]);
+        const total = totals.total;
+        const page = Math.min(filters.page, Math.max(1, Math.ceil(total / WORKSPACE_SESSION_PAGE_SIZE)));
+        const sessions = total ? await transaction.select({ ...summaryFields, activityCounts }).from(agentSessions).where(matches)
+          .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id))
+          .limit(WORKSPACE_SESSION_PAGE_SIZE).offset((page - 1) * WORKSPACE_SESSION_PAGE_SIZE) : [];
+        return { sessions, total, page, repositories, models: modelRows.map(({ model }) => model) };
+      }, { isolationLevel: "repeatable read", accessMode: "read only" });
     },
 
     async pageReady(workspaceId: string, { repo, source, from, to, after }: CliSessionListQuery) {

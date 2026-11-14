@@ -8,10 +8,12 @@ import {
   sessionImportRequest,
   syncEnrollmentRequest,
   syncEnrollmentResponse,
+  workspaceNameUpdate,
   workspaceResponse,
+  workspaceSessionSearchQuery,
   workspaceUsageTargetUpdate,
 } from "@tideline/contracts";
-import type { CliAccount, WorkspaceResponse } from "@tideline/contracts";
+import type { CliAccount, WorkspaceResponse, WorkspaceSessionSearchResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
 import { createSessionStore } from "@tideline/db/sessions";
 import { Hono } from "hono";
@@ -120,6 +122,20 @@ export function createWorkspaceRoutes() {
     return context.json(workspace satisfies WorkspaceResponse);
   });
 
+  routes.patch("/workspaces/:id", bodyLimit({
+    maxSize: 2_048,
+    onError: (context) => context.json({ error: "Workspace name exceeds the size limit." }, 413),
+  }), async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    if (!id.success) return context.json({ error: "Workspace not found." }, 404);
+
+    const update = workspaceNameUpdate.safeParse(await context.req.json().catch(() => null));
+    if (!update.success) return context.json({ error: "Enter a workspace name between 1 and 80 characters." }, 400);
+
+    const workspace = await workspaces.renameOwned({ workspaceId: id.data, ownerId: context.get("ownerId") }, update.data.name);
+    return workspace ? context.json(workspace) : context.json({ error: "Workspace not found." }, 404);
+  });
+
   routes.get("/workspaces/:id/usage-targets", async (context) => {
     const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
     if (!id.success) return context.json({ error: "Workspace not found." }, 404);
@@ -156,6 +172,19 @@ export function createWorkspaceRoutes() {
 
     const summaries = await sessions.listReady(workspaceId.data);
     return context.json(summaries.map(priceSession));
+  });
+
+  routes.get("/workspaces/:workspaceId/session-search", async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    if (!workspaceId.success || !await workspaces.findOwned({ workspaceId: workspaceId.data, ownerId: context.get("ownerId") })) {
+      return context.json({ error: "Workspace not found." }, 404);
+    }
+
+    const filters = workspaceSessionSearchQuery.safeParse(context.req.query());
+    if (!filters.success) return context.json({ error: "Invalid search or session filters." }, 400);
+
+    const result = await sessions.searchReady(workspaceId.data, filters.data);
+    return context.json({ ...result, sessions: result.sessions.map(priceSession) } satisfies WorkspaceSessionSearchResponse);
   });
 
   routes.get("/workspaces/:workspaceId/sessions/:sessionId", async (context) => {

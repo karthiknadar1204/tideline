@@ -7,7 +7,7 @@ import { saveBudget, saveGoal } from "./usage-target-actions";
 import type { TargetSaveResult } from "./usage-target-actions";
 
 const initialResult: TargetSaveResult = { kind: "idle" };
-const fieldClass = "mt-1 min-h-10 w-full rounded-md border border-current/25 bg-transparent px-3 py-2";
+const fieldClass = "mt-1 min-h-11 w-full rounded-lg border border-[var(--workspace-border)] bg-[var(--workspace-bg)] px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workspace-accent)] disabled:opacity-60";
 
 function TargetButtons({ kind, configured, pending, result }: {
   kind: "budget" | "goal";
@@ -18,11 +18,11 @@ function TargetButtons({ kind, configured, pending, result }: {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <button type="submit" disabled={pending} className="min-h-10 rounded-md border border-current/30 px-3 py-2 font-medium hover:bg-current/5 disabled:opacity-50">
+        <button type="submit" disabled={pending} className="min-h-10 rounded-lg bg-[var(--workspace-button)] px-4 py-2 text-sm font-medium text-[var(--workspace-button-text)] hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--workspace-accent)] disabled:opacity-50">
           Save {kind}
         </button>
         {configured && (
-          <button type="submit" name="intent" value="clear" formNoValidate disabled={pending} className="min-h-10 rounded-md px-3 py-2 underline underline-offset-4 disabled:opacity-50">
+          <button type="submit" name="intent" value="clear" formNoValidate disabled={pending} className="min-h-10 rounded-lg px-3 py-2 text-sm font-medium text-[var(--workspace-muted)] hover:bg-[var(--workspace-subtle)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--workspace-accent)] disabled:opacity-50">
             Clear {kind}
           </button>
         )}
