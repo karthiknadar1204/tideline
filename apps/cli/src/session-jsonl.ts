@@ -1,13 +1,20 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { MAX_CODEX_IMPORT_BYTES } from "@tideline/contracts";
-import type { SessionImportRequest } from "@tideline/contracts";
+import type { SessionImportRequest, SessionSource } from "@tideline/contracts";
 import type { SessionEvidence } from "./session-safety";
 
 export type SessionProjection = SessionImportRequest["session"];
 export type LiveReadOptions = { live: true; projectDirectory?: string; since?: number };
-export type LiveSession = { projectDirectory: string; session: SessionProjection; evidence: SessionEvidence };
+export type LiveSession = { projectDirectory: string; session: SessionProjection; evidence?: SessionEvidence };
+
+export function sourceSessionUuid(source: SessionSource, nativeId: string) {
+  const digest = createHash("sha256").update(source).update("\0").update(nativeId).digest("hex");
+  const variant = ((Number.parseInt(digest[16], 16) & 3) | 8).toString(16);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
 
 const chunkSize = 32 * 1024;
 

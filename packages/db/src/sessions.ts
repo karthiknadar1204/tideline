@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS } from "@tideline/contracts";
+import { codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel } from "@tideline/contracts";
 import type { SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -245,7 +245,7 @@ export function createSessionStore(databaseUrl: string) {
 
         const firstPrompt = pending.messages.find((message) => message.role === "user");
         const title = firstPrompt?.text.split("\n", 1)[0].trim().slice(0, 100)
-          .replace(/[\uD800-\uDBFF]$/, "") || (pending.source === "codex" ? "Codex session" : "Claude Code session");
+          .replace(/[\uD800-\uDBFF]$/, "") || `${sessionSourceLabel[pending.source]} session`;
         const lastMessageLine = pending.messages.at(-1)?.line ?? 0;
         const analytics = pending.analytics;
         const readyAnalytics = analytics?.tokenCoverage === "reported" && analytics.throughLine < lastMessageLine

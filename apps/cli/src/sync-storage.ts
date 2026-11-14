@@ -22,6 +22,8 @@ const configSchema = z.strictObject({
   credentialStore: z.enum(["file", "keychain"]),
   codexRoot: z.string().min(1),
   claudeRoot: z.string().min(1),
+  cursorRoot: z.string().min(1).optional(),
+  openCodeRoot: z.string().min(1).optional(),
   revoked: z.boolean().optional(),
 });
 

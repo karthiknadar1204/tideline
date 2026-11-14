@@ -43,7 +43,7 @@ To send the file, replace `--dry-run` with `--sanitized` and approve in Clerk wi
 
 The importer accepts a single Codex or Claude Code JSONL file up to 1 MiB. It sends user and assistant text with source line numbers and any reported model and token data. PostgreSQL stores the import and its processing result. Sending the same file again returns its existing receipt.
 
-## Sync new Codex and Claude Code sessions
+## Sync new agent sessions
 
 From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text, repository and model information, token counts, activity metadata, verified commit references, and safety findings when available. It redacts common credential patterns in messages. Raw tool arguments and results, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Conversation text can still contain sensitive information.
 
@@ -53,9 +53,13 @@ bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup \
 bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync run
 ```
 
-Approve the setup in Clerk, then leave `sync run` running. Tideline polls the local session files about every two seconds. The open workspace refreshes its session list every five seconds. Sync starts with sessions created after setup. The local queue catches up after reconnecting or restarting. Sync reads files up to 1 MiB and 500 messages per session. Use `sync status` to see queued, received, and failed uploads. Stop the collector with Ctrl+C. Run `sync revoke` with the collector stopped to revoke its upload access.
+Approve the setup in Clerk, then leave `sync run` running. Tideline checks local session files and databases about every two seconds. The open workspace refreshes its session list every five seconds. Sync starts with sessions created after setup. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Use `sync status` to see queued, received, and failed uploads. Stop the collector with Ctrl+C. Run `sync revoke` with the collector stopped to revoke its upload access.
 
-The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. It stores the local queue under `~/.tideline` by default. A sync credential is tied to one workspace and expires after 30 days. Sync runs on macOS and Linux using Bun or Node.js 22.13 or later. On macOS, the CLI uses Keychain by default. On Linux, pass `--credential-file` to store the credential in an owner-only file. The same option is available on macOS.
+The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. For Cursor, it reads local IDE SQLite storage under `~/Library/Application Support/Cursor/User` on macOS or `${XDG_CONFIG_HOME:-~/.config}/Cursor/User` on Linux. Use `TIDELINE_CURSOR_USER_DIR` to select a different Cursor User directory. OpenCode uses SQLite under `${XDG_DATA_HOME:-~/.local/share}/opencode`. If OpenCode uses a custom database file, set the same `OPENCODE_DB` when running setup.
+
+For an approval created before Cursor and OpenCode support, run `sync revoke`, then `sync setup` again to include these sources. Tideline syncs new conversations and later messages from the approved project. Cursor support covers local, single-folder IDE sessions. OpenCode support covers local sessions stored in SQLite. Both sync conversation text, repository information, and any reported model names. OpenCode also syncs available token counts. Cost and activity data are unavailable for these sources. Synced messages retain their original text after edits or deletions in the agent.
+
+Tideline stores the local queue under `~/.tideline` by default. A sync credential is tied to one workspace and expires after 30 days. Sync runs on macOS and Linux using Bun or Node.js 22.13 or later. On macOS, the CLI uses Keychain by default. On Linux, pass `--credential-file` to store the credential in an owner-only file. The same option is available on macOS.
 
 To preview a manual Claude Code import, pass `--source claude-code` to the import command. If Bun is unavailable on your PATH, replace `bun` in the commands above with `npx --yes --package=bun@1.4.4 -- bun`.
 

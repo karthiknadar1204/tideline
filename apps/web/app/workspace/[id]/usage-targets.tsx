@@ -1,3 +1,4 @@
+import { sessionSourceLabel } from "@tideline/contracts";
 import type { SessionSummary, UsageGoal, WorkspaceUsageTargets } from "@tideline/contracts";
 import { formatCost, formatCount } from "../../../lib/usage";
 import { calculateUsageTargets } from "../../../lib/usage-target-progress";
@@ -19,7 +20,7 @@ const statusLabel: Record<TargetProgress["status"], string> = {
   unavailable: "Usage unavailable",
 };
 
-const agentLabel: Record<UsageGoal["scope"], string> = { all: "All agents", codex: "Codex", "claude-code": "Claude Code" };
+const agentLabel: Record<UsageGoal["scope"], string> = { all: "All agents", ...sessionSourceLabel };
 const periodDate = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
 const progressTrack = "block h-2 w-full appearance-none overflow-hidden rounded-full bg-current/10 [&::-webkit-progress-bar]:bg-transparent [&::-webkit-progress-value]:bg-current [&::-moz-progress-bar]:bg-current";
 

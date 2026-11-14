@@ -1,4 +1,5 @@
 import { UserButton } from "@clerk/nextjs";
+import { sessionSourceLabel } from "@tideline/contracts";
 import Link from "next/link";
 import { listWorkspaceSessions, readWorkspaceUsageTargets, requestWorkspace } from "../../../lib/workspace";
 import { WorkspaceActivity } from "./activity-summary";
@@ -37,7 +38,7 @@ export default async function WorkspacePage({ params }: PageProps<"/workspace/[i
                 <Link className="block space-y-1 p-4 hover:bg-current/5" href={`/workspace/${id}/sessions/${session.id}`}>
                   <span className="block font-medium [overflow-wrap:anywhere]">{session.title}</span>
                   <span className="block text-sm opacity-75">
-                    {session.source === "claude-code" ? "Claude Code" : "Codex"} · {session.messageCount} {session.messageCount === 1 ? "message" : "messages"}
+                    {sessionSourceLabel[session.source]} · {session.messageCount} {session.messageCount === 1 ? "message" : "messages"}
                   </span>
                 </Link>
               </li>

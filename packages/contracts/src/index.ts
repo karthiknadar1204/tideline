@@ -16,7 +16,13 @@ export type WorkspaceResponse = z.infer<typeof workspaceResponse>;
 export const MAX_CODEX_IMPORT_BYTES = 1_048_576;
 export const MAX_CODEX_IMPORT_EVENTS = 500;
 
-export const sessionSource = z.enum(["codex", "claude-code"]);
+export const sessionSource = z.enum(["codex", "claude-code", "cursor", "opencode"]);
+export const sessionSourceLabel = {
+  codex: "Codex",
+  "claude-code": "Claude Code",
+  cursor: "Cursor",
+  opencode: "OpenCode",
+} satisfies Record<z.infer<typeof sessionSource>, string>;
 
 export const usageTargetCents = z.int().positive().max(2_000_000_000);
 const usageGoalScope = z.enum(["all", ...sessionSource.options]);

@@ -14,7 +14,7 @@ const haiku45 = { input: 1, cachedInput: 0.1, output: 5, cacheWrite5m: 1.25, cac
 
 // Standard API USD per million tokens. See https://developers.openai.com/api/docs/pricing
 // and https://platform.claude.com/docs/en/about-claude/pricing.
-const standardRates = {
+const standardRates: Partial<Record<SessionSource, ReadonlyMap<string, Rates>>> = {
   codex: new Map<string, Rates>([
     ["gpt-5.3-codex", { input: 1.75, cachedInput: 0.175, output: 14 }],
     ["gpt-5.4", { input: 2.5, cachedInput: 0.25, output: 15 }],
@@ -40,10 +40,10 @@ const standardRates = {
     ["claude-sonnet-5-5", { input: 2, cachedInput: 0.1, output: 10, cacheWrite5m: 2.5, cacheWrite1h: 4 }],
     ["claude-opus-5-5", { input: 4, cachedInput: 0.2, output: 20, cacheWrite5m: 5, cacheWrite1h: 8 }],
   ]),
-} satisfies Record<SessionSource, ReadonlyMap<string, Rates>>;
+};
 
 function estimateCost(source: SessionSource, { model, tokens }: SessionAnalytics["models"][number]) {
-  const rate = model && standardRates[source].get(model);
+  const rate = model && standardRates[source]?.get(model);
   if (!rate || !tokens || tokens.cacheWriteUnknown > 0 ||
     (tokens.cacheWrite5m > 0 && rate.cacheWrite5m === undefined) ||
     (tokens.cacheWrite1h > 0 && rate.cacheWrite1h === undefined)) return null;

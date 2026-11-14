@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useId, useState } from "react";
+import { sessionSource, sessionSourceLabel } from "@tideline/contracts";
 import type { UsageGoal } from "@tideline/contracts";
 import { saveBudget, saveGoal } from "./usage-target-actions";
 import type { TargetSaveResult } from "./usage-target-actions";
@@ -89,8 +90,7 @@ export function UsageGoalForm({ workspaceId, goal }: { workspaceId: string; goal
           <label htmlFor={`${fieldId}-scope`} className="block text-sm font-medium">Agent</label>
           <select id={`${fieldId}-scope`} name="scope" value={scope} onChange={(event) => setScope(event.target.value)} className={fieldClass}>
             <option value="all">All agents</option>
-            <option value="codex">Codex</option>
-            <option value="claude-code">Claude Code</option>
+            {sessionSource.options.map((source) => <option key={source} value={source}>{sessionSourceLabel[source]}</option>)}
           </select>
         </div>
       </fieldset>

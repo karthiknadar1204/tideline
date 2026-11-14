@@ -7,6 +7,7 @@ import {
   codexImportResponse,
   MAX_CODEX_IMPORT_BYTES,
   sessionImportRequest,
+  sessionSourceLabel,
   syncEnrollmentRequest,
   syncEnrollmentResponse,
 } from "@tideline/contracts";
@@ -14,9 +15,12 @@ import type { SessionImportRequest } from "@tideline/contracts";
 import { findSessionCommits } from "./commit-links";
 import { readClaudeSession } from "./claude-session";
 import { readCodexSession } from "./codex-session";
+import { readCursorSessions } from "./cursor-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
+import { readOpenCodeSessions } from "./opencode-session";
 import { readRepository } from "./repository";
 import { redactConversationText } from "./session-safety";
+import type { LiveSession } from "./session-jsonl";
 import {
   deleteSyncCredential,
   loadSyncCredential,
@@ -53,9 +57,16 @@ async function readPhysicalProjectDirectory(path: string) {
 }
 
 function configuredAgentRoots() {
+  const cursorConfig = process.platform === "darwin"
+    ? join(homedir(), "Library", "Application Support")
+    : (process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"));
+  const openCodeData = resolve(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode");
+  const openCodeDb = process.env.OPENCODE_DB;
   return {
     codexRoot: resolve(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "sessions"),
     claudeRoot: resolve(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
+    cursorRoot: resolve(process.env.TIDELINE_CURSOR_USER_DIR ?? join(cursorConfig, "Cursor", "User")),
+    openCodeRoot: openCodeDb === ":memory:" ? undefined : resolve(openCodeData, openCodeDb || "."),
   };
 }
 
@@ -82,7 +93,7 @@ export async function setupSync(options: SetupOptions) {
   }
 
   const projectDirectory = await readPhysicalProjectDirectory(options.project);
-  const { codexRoot, claudeRoot } = configuredAgentRoots();
+  const { codexRoot, claudeRoot, cursorRoot, openCodeRoot } = configuredAgentRoots();
   const apiOrigin = tidelineApiOrigin();
   const storage = await openSyncStorage({ lock: true, create: true });
   try {
@@ -90,8 +101,12 @@ export async function setupSync(options: SetupOptions) {
 
     const account = randomUUID();
     const credentialStore = options.credentialFile ? "file" : "keychain";
-    const roots = await Promise.all([bindRoot(codexRoot), bindRoot(claudeRoot)]);
-    console.info(`Syncing new Codex and Claude Code conversations from ${projectDirectory} to workspace ${workspace.data} at ${apiOrigin}.`);
+    const [codex, claude, cursor, openCode] = await Promise.all([
+      bindRoot(codexRoot), bindRoot(claudeRoot), bindRoot(cursorRoot), openCodeRoot && bindRoot(openCodeRoot),
+    ]);
+    const sources = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"], sessionSourceLabel.cursor];
+    if (openCodeRoot) sources.push(sessionSourceLabel.opencode);
+    console.info(`Syncing new conversations from ${sources.join(", ")} for ${projectDirectory} to workspace ${workspace.data} at ${apiOrigin}.`);
     console.info("The collector sends user and assistant text, source references, times, Git repository names and identifiers, models, and token counts. Common credentials in text are redacted.");
     console.info("Activity includes tool, skill, and child agent names and statuses.");
     console.info("The collector checks Git commits and safety patterns locally and sends only commit links and finding types and line numbers.");
@@ -106,7 +121,8 @@ export async function setupSync(options: SetupOptions) {
 
     const config: SyncConfig = {
       apiOrigin, workspaceId: workspace.data, projectDirectory, startedAt: new Date().toISOString(),
-      expiresAt: enrollment.data.expiresAt, account, credentialStore, codexRoot: roots[0], claudeRoot: roots[1],
+      expiresAt: enrollment.data.expiresAt, account, credentialStore, codexRoot: codex, claudeRoot: claude,
+      cursorRoot: cursor, openCodeRoot: openCode,
     };
     try {
       await storeSyncCredential(storage.directory, config, enrollment.data.token);
@@ -170,35 +186,14 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
     { source: "claude-code", root: config.claudeRoot, depth: 1, read: readClaudeSession },
   ] as const;
 
-  async function collect(path: string, root: string, source: SessionImportRequest["session"]["source"], read: SourceReader) {
-    const stats = await lstat(path);
-    if (!stats.isFile() || stats.mtimeMs < since) return;
-    const physicalPath = await realpath(path);
-    if (physicalPath !== path || !isWithin(physicalPath, root)) return;
-    const version = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
-    const previous = observed.get(path);
-    if (previous?.version === version && (!previous.retryAt || previous.retryAt > Date.now())) {
-      nextObserved.set(path, previous);
-      return;
-    }
-
-    let result: Awaited<ReturnType<SourceReader>>;
-    try {
-      result = await read(physicalPath, { live: true, projectDirectory: config.projectDirectory, since });
-    } catch {
-      console.warn(`${source}: skipped a session file that could not be read or parsed.`);
-      nextObserved.set(path, { version, retryAt: Date.now() + 30_000 });
-      return;
-    }
-
-    nextObserved.set(path, { version });
-    if (!result || Date.parse(result.session.startedAt) < since) return;
+  async function queueSession(result: LiveSession) {
+    const { source, analytics } = result.session;
+    if (Date.parse(result.session.startedAt) < since) return;
     const project = await realpath(result.projectDirectory).catch(() => "");
     if (!project || !isWithin(project, config.projectDirectory)) return;
     if (!repositories.has(project)) repositories.set(project, await readRepository(project));
-    const { analytics } = result.session;
     const evidence = result.evidence;
-    const review = {
+    const review = evidence && {
       throughLine: evidence.throughLine,
       truncated: evidence.truncated,
       findings: evidence.findings,
@@ -236,7 +231,32 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
       projection: session.activity ? 2 : 1,
       body,
     });
-    if (phase === "full") {
+    return phase === "full" ? "full" : undefined;
+  }
+
+  async function collect(path: string, root: string, source: SessionImportRequest["session"]["source"], read: SourceReader) {
+    const stats = await lstat(path);
+    if (!stats.isFile() || stats.mtimeMs < since) return;
+    const physicalPath = await realpath(path);
+    if (physicalPath !== path || !isWithin(physicalPath, root)) return;
+    const version = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+    const previous = observed.get(path);
+    if (previous?.version === version && (!previous.retryAt || previous.retryAt > Date.now())) {
+      nextObserved.set(path, previous);
+      return;
+    }
+
+    let result: Awaited<ReturnType<SourceReader>>;
+    try {
+      result = await read(physicalPath, { live: true, projectDirectory: config.projectDirectory, since });
+    } catch {
+      console.warn(`${source}: skipped a session file that could not be read or parsed.`);
+      nextObserved.set(path, { version, retryAt: Date.now() + 30_000 });
+      return;
+    }
+
+    nextObserved.set(path, { version });
+    if (result && await queueSession(result) === "full") {
       nextObserved.delete(path);
       return "full";
     }
@@ -266,6 +286,30 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
     } catch (error) {
       if (!isInaccessible(error)) throw error;
       if (error.code !== "ENOENT") inaccessible = true;
+    }
+  }
+
+  const databaseSources = [
+    { source: "cursor", root: config.cursorRoot, read: readCursorSessions },
+    { source: "opencode", root: config.openCodeRoot, read: readOpenCodeSessions },
+  ] as const;
+  for (const { source, root, read } of databaseSources) {
+    if (signal.aborted || full) break;
+    if (!root) continue;
+    try {
+      if (await realpath(root) !== root) {
+        console.warn(`${sessionSourceLabel[source]}: the configured session location changed. Revoke and set up sync again.`);
+        continue;
+      }
+      for await (const result of read(root, { live: true, projectDirectory: config.projectDirectory, since })) {
+        if (signal.aborted) break;
+        if (await queueSession(result) === "full") {
+          full = true;
+          break;
+        }
+      }
+    } catch (error) {
+      if (!isInaccessible(error) || error.code !== "ENOENT") inaccessible = true;
     }
   }
 
@@ -306,7 +350,10 @@ export async function runSync() {
       throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
     }
     const token = await loadSyncCredential(storage.directory, config);
-    console.info("Watching new Codex and Claude Code sessions. Press Ctrl+C to stop.");
+    const names = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"]];
+    if (config.cursorRoot) names.push(sessionSourceLabel.cursor);
+    if (config.openCodeRoot) names.push(sessionSourceLabel.opencode);
+    console.info(`Watching new sessions from ${names.join(", ")}. Press Ctrl+C to stop.`);
     let observed = new Map<string, ObservedFile>();
     let nextRetryAt = 0;
     let retryDelay = 2_000;
@@ -358,6 +405,9 @@ export async function syncStatus() {
     console.info(`Workspace: ${config.workspaceId} at ${config.apiOrigin}`);
     console.info(`Project: ${config.projectDirectory}`);
     console.info(`New sessions since: ${config.startedAt}`);
+    if (!config.cursorRoot) {
+      console.info("This approval covers the original sources. Set up sync again to include Cursor and OpenCode.");
+    }
     console.info(config.revoked ? "Approval revoked." : `Approval expires: ${config.expiresAt}`);
     console.info(`Queued: ${counts.get("queued") ?? 0}. Received: ${counts.get("received") ?? 0}. Failed: ${counts.get("failed") ?? 0}.`);
   } finally {

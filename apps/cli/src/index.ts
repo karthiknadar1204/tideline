@@ -38,7 +38,7 @@ sync
     await setupSync(options);
   });
 
-sync.command("run").description("Watch for new Codex and Claude Code sessions").action(async () => {
+sync.command("run").description("Watch for new Codex, Claude Code, Cursor, and OpenCode sessions").action(async () => {
   const { runSync } = await import("./sync");
   await runSync();
 });

@@ -1,3 +1,4 @@
+import { sessionSourceLabel } from "@tideline/contracts";
 import Link from "next/link";
 import { readWorkspaceSession } from "../../../../../lib/workspace";
 import { SessionActivity } from "../../activity-summary";
@@ -8,7 +9,7 @@ import { SessionUsage } from "../../usage-summary";
 export default async function SessionPage({ params }: PageProps<"/workspace/[id]/sessions/[sessionId]">) {
   const { id, sessionId } = await params;
   const session = await readWorkspaceSession(id, sessionId);
-  const agent = session.source === "claude-code" ? "Claude Code" : "Codex";
+  const agent = sessionSourceLabel[session.source];
 
   return (
     <main className="mx-auto min-h-dvh w-full max-w-3xl px-5 py-12 sm:px-8">

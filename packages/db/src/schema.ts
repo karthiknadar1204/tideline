@@ -1,3 +1,4 @@
+import { sessionSource as sessionSourceContract } from "@tideline/contracts";
 import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, UsageGoal } from "@tideline/contracts";
 import { integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
@@ -9,7 +10,10 @@ export const workspaces = pgTable("workspaces", {
   usageGoal: jsonb("usage_goal").$type<UsageGoal>(),
 });
 
-export const sessionSource = pgEnum("session_source", ["codex", "claude-code"]);
+export const sessionSource = pgEnum("session_source", [
+  sessionSourceContract.enum.codex,
+  ...sessionSourceContract.options.filter((source) => source !== "codex"),
+]);
 
 export const agentSessions = pgTable("codex_sessions", {
   id: uuid("id").defaultRandom().primaryKey(),

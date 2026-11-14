@@ -1,4 +1,4 @@
-import { MAX_CODEX_IMPORT_BYTES, sessionImportRequest, codexImportResponse, sessionSource } from "@tideline/contracts";
+import { MAX_CODEX_IMPORT_BYTES, sessionImportRequest, codexImportResponse, sessionSourceLabel } from "@tideline/contracts";
 import { readClaudeSession } from "./claude-session";
 import { readCodexSession } from "./codex-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
@@ -16,16 +16,16 @@ export async function importSession(file: string, options: ImportOptions) {
   if (!workspaceId.success) throw new Error("Set --workspace to the destination workspace UUID.");
 
   const apiOrigin = tidelineApiOrigin();
-  const source = sessionSource.safeParse(options.source);
-  if (!source.success) throw new Error("Set --source to codex or claude-code.");
+  const { source } = options;
+  if (source !== "codex" && source !== "claude-code") throw new Error("JSONL import supports codex and claude-code. Use sync to collect Cursor and OpenCode sessions.");
 
-  const session = source.data === "claude-code"
+  const session = source === "claude-code"
     ? await readClaudeSession(file)
     : await readCodexSession(file);
   const payload = sessionImportRequest.safeParse({
     version: 1,
     workspaceId: workspaceId.data,
-    session: { ...session, source: source.data },
+    session: { ...session, source },
   });
   if (!payload.success) throw new Error("The file exceeds the supported message limits or contains invalid session data.");
 
@@ -37,7 +37,7 @@ export async function importSession(file: string, options: ImportOptions) {
   const count = session.events.length;
   const messageLabel = count === 1 ? "message" : "messages";
   process.stdout.write(`Destination workspace: ${workspaceId.data} at ${apiOrigin}\n`);
-  const sourceName = source.data === "claude-code" ? "Claude Code" : "Codex";
+  const sourceName = sessionSourceLabel[source];
   process.stdout.write(`${sourceName} session: ${session.sourceSessionId} with ${count} text ${messageLabel}.\n`);
   if (session.analytics?.models.length) {
     process.stdout.write("The file also contains model metadata. Tideline includes token counts where the agent reports them.\n");
