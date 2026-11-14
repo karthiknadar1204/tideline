@@ -11,10 +11,12 @@ import {
   syncEnrollmentResponse,
 } from "@tideline/contracts";
 import type { SessionImportRequest } from "@tideline/contracts";
+import { findSessionCommits } from "./commit-links";
 import { readClaudeSession } from "./claude-session";
 import { readCodexSession } from "./codex-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
 import { readRepository } from "./repository";
+import { redactConversationText } from "./session-safety";
 import {
   deleteSyncCredential,
   loadSyncCredential,
@@ -36,18 +38,6 @@ const syncRoutes = {
   sessions: "/v1/cli/sync/sessions",
   revoke: "/v1/cli/sync/revoke",
 };
-
-const automaticRedactions: [RegExp, string][] = [
-  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g, "[REDACTED PRIVATE KEY]"],
-  [/\b(?:sk-[A-Za-z0-9_-]{16,}|(?:sk|rk)_(?:test|live)_[A-Za-z0-9_+=/-]{16,}|AIza[A-Za-z0-9_-]{35}|tdsync_[0-9a-f]{64}|(?:github_pat_|gh[pousr]_|xox[baprs]-)[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/g, "[REDACTED TOKEN]"],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{12,}={0,2}/gi, "Bearer [REDACTED]"],
-  [/(\b(?:[A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|PASSWORD)|password)\s*[:=]\s*)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s,;]+)/gi, "$1[REDACTED]"],
-  [/(https?:\/\/[^\s:/@]+:)[^\s/@]+(?=@)/gi, "$1[REDACTED]"],
-];
-
-function redactConversationText(text: string) {
-  return automaticRedactions.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text);
-}
 
 function isWithin(path: string, directory: string) {
   const offset = relative(directory, path);
@@ -82,7 +72,7 @@ export async function setupSync(options: SetupOptions) {
   const workspace = syncEnrollmentRequest.shape.workspaceId.safeParse(options.workspace);
   if (!workspace.success) throw new Error("Set --workspace to the destination workspace UUID.");
   if (!options.conversations) {
-    throw new Error("Pass --conversations to approve syncing conversations, usage, and activity from this project.");
+    throw new Error("Pass --conversations to approve syncing conversations, usage, activity, commit links, and safety findings from this project.");
   }
   if (process.platform === "win32") {
     throw new Error("Tideline automatic sync currently requires macOS or Linux.");
@@ -104,6 +94,7 @@ export async function setupSync(options: SetupOptions) {
     console.info(`Syncing new Codex and Claude Code conversations from ${projectDirectory} to workspace ${workspace.data} at ${apiOrigin}.`);
     console.info("The collector sends user and assistant text, source references, times, Git repository names and identifiers, models, and token counts. Common credentials in text are redacted.");
     console.info("Activity includes tool, skill, and child agent names and statuses.");
+    console.info("The collector checks Git commits and safety patterns locally and sends only commit links and finding types and line numbers.");
     if (credentialStore === "file") console.info("The sync credential will be stored in an owner-only local file.");
 
     const accessToken = await approveInBrowser(options.browser);
@@ -206,12 +197,20 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
     if (!project || !isWithin(project, config.projectDirectory)) return;
     if (!repositories.has(project)) repositories.set(project, await readRepository(project));
     const { analytics } = result.session;
+    const evidence = result.evidence;
+    const review = {
+      throughLine: evidence.throughLine,
+      truncated: evidence.truncated,
+      findings: evidence.findings,
+      commits: await findSessionCommits(project, evidence.commitCandidates),
+    };
 
     const candidate = sessionImportRequest.safeParse({
       version: 1, workspaceId: config.workspaceId,
       session: {
         ...result.session, source,
         analytics: analytics && { ...analytics, repository: repositories.get(project) ?? null },
+        review,
         events: result.session.events.map((event) => ({ ...event, text: redactConversationText(event.text) })),
       },
     });
@@ -233,7 +232,7 @@ async function collectNewSessions(config: SyncConfig, storage: Storage, observed
       sessionKey: `${source}:${session.sourceSessionId}`,
       fingerprint: createHash("sha256").update(body).digest("hex"),
       messageCount: session.events.length,
-      tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0),
+      tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0, session.review?.throughLine ?? 0),
       projection: session.activity ? 2 : 1,
       body,
     });

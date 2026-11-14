@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createClaudeActivity } from "./claude-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import { createSessionSafety } from "./session-safety";
 import { createModelUsage, readModelId } from "./session-usage";
 
 const claudeRecord = z.object({
@@ -93,7 +94,8 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const projectScope = createProjectScope(options?.projectDirectory);
   let projectDirectory: string | undefined;
   const usage = createModelUsage();
-  const activity = createClaudeActivity();
+  const safety = options ? createSessionSafety() : undefined;
+  const activity = createClaudeActivity(safety);
   const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null }>();
   let throughLine = 0;
 
@@ -110,11 +112,13 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       throw new Error("Select a JSONL file containing exactly one Claude Code session.");
     }
 
+    let inProject = false;
     if (options) {
       if (!session && options.since !== undefined && Date.parse(at.data) < options.since) return;
       const directory = await projectScope(record.cwd);
       if (!directory) return;
       projectDirectory ??= directory;
+      inProject = directory === projectDirectory;
     }
     session ??= { source: "claude-code", sourceSessionId: id.data, startedAt: at.data };
 
@@ -129,7 +133,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     const isTaskNotification = record.origin?.kind === "task-notification";
     activity.observe({
       line, role: message.data.role, content: message.data.content, metadata: record.toolUseResult,
-      isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid,
+      isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid, inProject,
     });
     if (record.toolUseResult !== undefined || record.sourceToolAssistantUUID !== undefined || isTaskNotification) continue;
 
@@ -175,6 +179,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       .filter((part) => part.length > 0 && !interruption.test(part))
       .join("\n");
     if (!text) continue;
+    safety?.scanCredential(text, line);
     if (events.length === MAX_CODEX_IMPORT_EVENTS) {
       throw new Error(`The session exceeds the ${MAX_CODEX_IMPORT_EVENTS}-message import limit.`);
     }
@@ -189,8 +194,9 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const analytics = usage.snapshot(throughLine);
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
-    if (session && projectDirectory && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity } };
+    if (session && projectDirectory && safety && events.length) {
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity },
+        evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
     }
     return;
   }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createCodexActivity } from "./codex-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import { createSessionSafety } from "./session-safety";
 import { combineTokens, createModelUsage, readModelId, zeroTokens } from "./session-usage";
 
 const rolloutRecord = z.object({
@@ -47,7 +48,9 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const projectScope = createProjectScope(options?.projectDirectory);
   let projectDirectory: string | undefined;
   const usage = createModelUsage();
-  const activity = createCodexActivity();
+  const safety = options ? createSessionSafety() : undefined;
+  const activity = createCodexActivity(safety);
+  let currentProject: string | undefined;
   let throughLine = 0;
   let lastPromptLine = 0;
   let lastUsageLine = 0;
@@ -77,6 +80,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
         if (options.since !== undefined && Date.parse(startedAt.data) < options.since) return;
         projectDirectory = await projectScope(cwd);
         if (!projectDirectory) return;
+        currentProject = projectDirectory;
         for (const root of workspaceRoots ?? []) {
           if (!await projectScope(root)) return;
         }
@@ -88,7 +92,13 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
     if (!session) throw new Error("The selected file must begin with Codex session metadata.");
     if (record.data.type === "turn_context") {
       const context = turnContext.safeParse(record.data.payload);
-      if (options && (!context.success || (context.data.cwd !== undefined && !await projectScope(context.data.cwd)))) return;
+      if (options) {
+        if (!context.success) return;
+        if (context.data.cwd !== undefined) {
+          currentProject = await projectScope(context.data.cwd);
+          if (!currentProject) return;
+        }
+      }
       activeModel = readModelId(context.data?.model);
       modelsSinceLastUsage.add(activeModel);
       usage.add(activeModel, null);
@@ -96,7 +106,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       continue;
     }
     if (record.data.type === "event_msg") {
-      activity.event(record.data.payload, line, session.sourceSessionId);
+      activity.event(record.data.payload, line, session.sourceSessionId, projectDirectory);
       const count = tokenEvent.safeParse(record.data.payload);
       if (!count.success || count.data.info == null) continue;
       throughLine = line;
@@ -125,7 +135,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       continue;
     }
     if (record.data.type !== "response_item") continue;
-    activity.response(record.data.payload, line);
+    activity.response(record.data.payload, line, currentProject === projectDirectory ? projectDirectory : undefined);
 
     const message = messageRecord.safeParse(record.data.payload);
     if (!message.success) continue;
@@ -146,6 +156,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
     });
     const text = parts.join("\n");
     if (!text.trim()) continue;
+    safety?.scanCredential(text, line);
 
     if (events.length === MAX_CODEX_IMPORT_EVENTS) {
       throw new Error(`The session exceeds the ${MAX_CODEX_IMPORT_EVENTS}-message import limit.`);
@@ -159,8 +170,9 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const analytics = usage.snapshot(throughLine);
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
-    if (session && projectDirectory && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity } };
+    if (session && projectDirectory && safety && events.length) {
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity },
+        evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
     }
     return;
   }

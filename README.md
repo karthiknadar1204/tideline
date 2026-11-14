@@ -45,7 +45,7 @@ The importer accepts a single Codex or Claude Code JSONL file up to 1 MiB. It se
 
 ## Sync new Codex and Claude Code sessions
 
-From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text, repository and model information, token counts, and activity metadata when available. It redacts common credential patterns in messages. Raw tool arguments and results, skill instructions, child agent transcripts, repository paths, remote URLs, and attachments stay on your machine. Conversation text can still contain sensitive information.
+From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text, repository and model information, token counts, activity metadata, verified commit references, and safety findings when available. It redacts common credential patterns in messages. Raw tool arguments and results, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Conversation text can still contain sensitive information.
 
 ```sh
 bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup \
@@ -68,6 +68,12 @@ Open your private workspace to see reported tokens and estimated cost across ses
 ## Read session activity
 
 Open a session to see tool calls, reported skill use, and child agent runs. **Returned** means a tool produced a result. A child run can stay **Running** after its launch tool returns. Tideline uses the parent session log and shows the latest status it can confirm. Each session includes up to 250 entries per activity category. Workspace totals show activity from sessions that have synced it.
+
+## Review commits and safety findings
+
+Open a synced session to see commits reported by a `git commit` tool result and verified against the local repository. Tideline builds commit links for GitHub and GitLab origins. Other repositories show the verified SHA. A link can become reachable when you push the commit to the origin.
+
+The collector looks for specific risky shell commands and possible credentials. The dashboard shows the rule and log line. Findings are advisory. Older sessions show unavailable until the collector sends a review.
 
 | Workspace | Current entry point |
 | --- | --- |

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { codexSkillCatalog, codexSkillInstructions } from "@tideline/contracts";
+import { codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS } from "@tideline/contracts";
 import type { SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -29,12 +29,12 @@ async function receiveSession(
   { workspaceId, session }: SessionImportRequest,
   allowAppend: boolean,
 ) {
-  const { source, sourceSessionId, startedAt, events, analytics, activity } = session;
+  const { source, sourceSessionId, startedAt, events, analytics, activity, review } = session;
   const messages = source === "codex" ? withoutLegacySkillContext(events) : events;
   if (!messages.length) return null;
   const [created] = await transaction
     .insert(agentSessions)
-    .values({ workspaceId, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity })
+    .values({ workspaceId, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity, pendingReview: review })
     .onConflictDoNothing({ target: [agentSessions.workspaceId, agentSessions.source, agentSessions.sourceSessionId] })
     .returning({ id: agentSessions.id });
 
@@ -48,6 +48,7 @@ async function receiveSession(
     messages: agentSessions.messages,
     analytics: agentSessions.pendingAnalytics,
     activity: agentSessions.pendingActivity,
+    review: agentSessions.pendingReview,
   }).from(agentSessions).where(and(
     eq(agentSessions.workspaceId, workspaceId),
     eq(agentSessions.source, source),
@@ -90,7 +91,26 @@ async function receiveSession(
   const previousActivityLine = existing.activity?.throughLine ?? 0;
   if (activity?.throughLine === previousActivityLine && !isDeepStrictEqual(existing.activity, activity)) return null;
   const activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
-  if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate) return replay;
+  const previousReviewLine = existing.review?.throughLine ?? 0;
+  let reviewUpdate = review && review.throughLine > previousReviewLine ? review : undefined;
+  if (review && existing.review && review.throughLine === previousReviewLine) {
+    if (!isDeepStrictEqual(existing.review.findings, review.findings)) return null;
+    const previousCommits = new Map(existing.review.commits.map((commit) => [commit.sha, commit]));
+    for (const commit of review.commits) {
+      const previous = previousCommits.get(commit.sha);
+      if (!previous || (previous.url === null && commit.url !== null)) {
+        previousCommits.set(commit.sha, previous ? { ...previous, url: commit.url } : commit);
+      }
+    }
+    const commits = [...previousCommits.values()].slice(0, MAX_SESSION_COMMITS);
+    const next = {
+      ...review,
+      commits,
+      truncated: review.truncated || existing.review.truncated || previousCommits.size > MAX_SESSION_COMMITS,
+    };
+    if (!isDeepStrictEqual(existing.review, next)) reviewUpdate = next;
+  }
+  if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate && !reviewUpdate) return replay;
 
   await transaction.update(agentSessions)
     .set({
@@ -100,6 +120,7 @@ async function receiveSession(
         ...analyticsUpdate, repository: existing.analytics?.repository ?? analyticsUpdate.repository,
       },
       pendingActivity: activityUpdate,
+      pendingReview: reviewUpdate,
     })
     .where(eq(agentSessions.id, existing.id));
 
@@ -176,6 +197,7 @@ export function createSessionStore(databaseUrl: string) {
       const [session] = await db.select({
         ...summaryFields,
         activity: agentSessions.readyActivity,
+        review: agentSessions.readyReview,
         sourceSessionId: agentSessions.sourceSessionId,
         messages: agentSessions.messages,
       }).from(agentSessions).where(and(
@@ -185,13 +207,14 @@ export function createSessionStore(databaseUrl: string) {
       ));
 
       if (!session) return;
-      const { activity, messages, ...summary } = session;
+      const { activity, review, messages, ...summary } = session;
       return {
         ...summary,
         activityCounts: countActivity(activity),
         activity: activity && {
           truncated: activity.truncated, tools: activity.tools, skills: activity.skills, children: activity.children,
         },
+        review: review && { commits: review.commits, findings: review.findings, truncated: review.truncated },
         messages: messages.slice(0, session.messageCount),
       };
     },
@@ -204,6 +227,7 @@ export function createSessionStore(databaseUrl: string) {
           messages: agentSessions.messages,
           analytics: agentSessions.pendingAnalytics,
           activity: agentSessions.pendingActivity,
+          review: agentSessions.pendingReview,
         }).from(agentSessions)
           .where(sql`${agentSessions.readyMessageCount} < jsonb_array_length(${agentSessions.messages})
             or (${agentSessions.pendingAnalytics} ->> 'throughLine')
@@ -211,7 +235,8 @@ export function createSessionStore(databaseUrl: string) {
             or (${agentSessions.pendingAnalytics} -> 'repository' ->> 'key')
               is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')
             or (${agentSessions.pendingActivity} ->> 'throughLine')
-              is distinct from (${agentSessions.readyActivity} ->> 'throughLine')`)
+              is distinct from (${agentSessions.readyActivity} ->> 'throughLine')
+            or ${agentSessions.pendingReview} is distinct from ${agentSessions.readyReview}`)
           .orderBy(asc(agentSessions.receivedAt), asc(agentSessions.id))
           .limit(1)
           .for("update", { skipLocked: true });
@@ -228,7 +253,7 @@ export function createSessionStore(databaseUrl: string) {
           : analytics;
 
         await transaction.update(agentSessions)
-          .set({ title, readyMessageCount: pending.messages.length, readyAnalytics, readyActivity: pending.activity })
+          .set({ title, readyMessageCount: pending.messages.length, readyAnalytics, readyActivity: pending.activity, readyReview: pending.review })
           .where(eq(agentSessions.id, pending.id));
 
         return pending.id;

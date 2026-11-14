@@ -3,10 +3,11 @@ import { open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { MAX_CODEX_IMPORT_BYTES } from "@tideline/contracts";
 import type { SessionImportRequest } from "@tideline/contracts";
+import type { SessionEvidence } from "./session-safety";
 
 export type SessionProjection = SessionImportRequest["session"];
 export type LiveReadOptions = { live: true; projectDirectory?: string; since?: number };
-export type LiveSession = { projectDirectory: string; session: SessionProjection };
+export type LiveSession = { projectDirectory: string; session: SessionProjection; evidence: SessionEvidence };
 
 const chunkSize = 32 * 1024;
 

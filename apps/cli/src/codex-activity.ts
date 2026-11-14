@@ -1,6 +1,7 @@
 import { activityName, codexSkillInstructions, MAX_SESSION_ACTIVITY_ITEMS } from "@tideline/contracts";
 import type { SessionActivity } from "@tideline/contracts";
 import { z } from "zod";
+import type { createSessionSafety } from "./session-safety";
 
 type ToolCall = SessionActivity["tools"][number];
 type SkillUse = SessionActivity["skills"][number];
@@ -41,7 +42,18 @@ const toolItem = z.object({
   success: z.unknown().optional(),
   exit_code: z.unknown().optional(),
   source: z.unknown().optional(),
+  command: z.array(z.string()).optional(),
+  cwd: z.string().optional(),
+  stdout: z.string().nullish(),
+  stderr: z.string().nullish(),
+  aggregated_output: z.string().nullish(),
   result: z.unknown().optional(),
+});
+const commandArguments = z.object({
+  cmd: z.string().optional(),
+  command: z.union([z.string(), z.array(z.string())]).optional(),
+  cwd: z.string().optional(),
+  workdir: z.string().optional(),
 });
 const collaborationItem = z.object({
   sender_thread_id: z.uuid(),
@@ -117,7 +129,7 @@ function agentStatus(value: unknown): ChildRun["status"] {
   return "unknown";
 }
 
-export function createCodexActivity() {
+export function createCodexActivity(safety?: ReturnType<typeof createSessionSafety>) {
   const tools = new Map<string, ToolCall>();
   const children = new Map<string, ChildRun>();
   const skills: SkillUse[] = [];
@@ -158,7 +170,7 @@ export function createCodexActivity() {
     }
   }
 
-  function response(value: unknown, line: number) {
+  function response(value: unknown, line: number, projectDirectory?: string) {
     const item = responseActivity.safeParse(value).data;
     if (!item) return;
     const id = item.call_id ?? item.id;
@@ -168,6 +180,13 @@ export function createCodexActivity() {
         item.type === "web_search_call" || item.type === "tool_search_call") {
       const name = qualifiedName(item.namespace, item.name ?? item.type.replace(/_call$/u, ""));
       if (!name) return;
+      if (safety && (name === "exec_command" || name === "shell_command")) {
+        const arguments_ = commandArguments.safeParse(structuredValue(item.arguments)).data;
+        const command = arguments_?.cmd ?? arguments_?.command;
+        const directory = arguments_?.workdir ?? arguments_?.cwd;
+        if (command) safety.command({ id, command, line, inProject: !!projectDirectory &&
+          (directory === undefined || directory === "." || directory === projectDirectory) });
+      }
       if (spawnToolNames.has(name)) {
         const selection = childSelection.safeParse(structuredValue(item.arguments)).data;
         const selected = safeName(selection?.task_name) ?? safeName(selection?.agent_type);
@@ -183,6 +202,11 @@ export function createCodexActivity() {
     const name = tools.get(id)?.name ?? qualifiedName(item.namespace, item.name);
     if (!name) return;
     const failed = item.is_error === true || explicitToolFailure(item.status, item.success, item.output);
+    if (safety && typeof item.output === "string" && (name === "exec_command" || name === "shell_command")) {
+      const envelope = /^Chunk ID: [a-z0-9]+\r?\n(?:Wall time: [^\r\n]*\r?\n)?Process exited with code (-?\d+)\r?\n(?:Original token count: \d+\r?\n)?Output:\r?\n([\s\S]*)$/u.exec(item.output);
+      safety.result({ id, output: envelope?.[2] ?? item.output, line,
+        success: failed ? false : envelope ? envelope[1] === "0" : undefined });
+    }
     writeTool(id, name, failed ? "failed" : "returned", line);
     if (failed) return;
 
@@ -220,7 +244,7 @@ export function createCodexActivity() {
     });
   }
 
-  function event(value: unknown, line: number, sessionId: string) {
+  function event(value: unknown, line: number, sessionId: string, projectDirectory?: string) {
     const parsed = eventActivity.safeParse(value).data;
     if (!parsed || (parsed.thread_id && parsed.thread_id !== sessionId)) return;
     if (parsed.type === "sub_agent_activity") {
@@ -230,6 +254,15 @@ export function createCodexActivity() {
     if (parsed.type !== "item_completed" && parsed.type !== "item_started") return;
     const item = toolItem.safeParse(parsed.item).data;
     if (!item || (item.type === "CommandExecution" && item.source === "user_shell")) return;
+    if (safety && item.type === "CommandExecution") {
+      if (item.command) safety.command({ id: item.id, command: item.command, line,
+        inProject: !!projectDirectory && item.cwd === projectDirectory });
+      if (parsed.type === "item_completed") {
+        const output = [item.stdout, item.stderr].filter(Boolean).join("\n") || item.aggregated_output || "";
+        safety.result({ id: item.id, output, line, success: explicitToolFailure(item.status, item.success) ? false :
+          typeof item.exit_code === "number" ? item.exit_code === 0 : undefined });
+      }
+    }
     if (item.type === "SubAgentActivity") {
       childLifecycle(parsed.item, line);
       return;

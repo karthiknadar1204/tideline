@@ -30,7 +30,7 @@ sync
   .description("Approve conversation sync for one project and workspace")
   .requiredOption("--workspace <id>", "Destination personal workspace ID")
   .requiredOption("--project <directory>", "Project directory to sync")
-  .option("--conversations", "Allow conversation text, usage, and activity metadata from new sessions")
+  .option("--conversations", "Allow conversation text, usage, activity, commit links, and safety findings from new sessions")
   .option("--credential-file", "Use an owner-only file in place of the system keychain")
   .option("--no-browser", "Show the approval link without opening your browser")
   .action(async (options) => {

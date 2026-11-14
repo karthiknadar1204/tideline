@@ -91,6 +91,42 @@ const activityCounts = z.strictObject({
   truncated: z.boolean(),
 });
 
+export const MAX_SESSION_COMMITS = 30;
+export const MAX_SESSION_FINDINGS = 100;
+const commitSha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+const pathSegment = "[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}";
+const gitHubCommitPath = new RegExp(`^/${pathSegment}/${pathSegment}/commit/([0-9a-f]+)$`);
+const gitLabCommitPath = new RegExp(`^/(?:${pathSegment}/)+${pathSegment}/-/commit/([0-9a-f]+)$`);
+
+export const commitLink = z.strictObject({
+  sha: commitSha,
+  line: z.int().positive(),
+  url: z.string().max(512).nullable(),
+}).refine(({ sha, url }) => {
+  if (url === null) return true;
+  for (const [origin, path] of [["https://github.com", gitHubCommitPath], ["https://gitlab.com", gitLabCommitPath]] as const) {
+    if (url.startsWith(origin) && path.exec(url.slice(origin.length))?.[1] === sha) return true;
+  }
+  return false;
+}, { path: ["url"], message: "Use a canonical HTTPS commit link for the verified SHA." });
+
+const safetyFinding = z.strictObject({
+  rule: z.enum(["possible-credential", "force-push", "hard-reset", "git-clean", "recursive-delete", "remote-shell"]),
+  line: z.int().positive(),
+});
+
+const reviewDetail = z.strictObject({
+  commits: z.array(commitLink).max(MAX_SESSION_COMMITS),
+  findings: z.array(safetyFinding).max(MAX_SESSION_FINDINGS),
+  truncated: z.boolean(),
+});
+
+const sessionReview = reviewDetail.extend({ throughLine: z.int().positive() }).refine(({ commits, findings, throughLine }) => (
+  commits.every(({ line }) => line <= throughLine) && findings.every(({ line }) => line <= throughLine) &&
+  new Set(commits.map(({ sha }) => sha)).size === commits.length &&
+  new Set(findings.map(({ rule, line }) => `${rule}:${line}`)).size === findings.length
+), { message: "Review entries must be unique and covered by the source cursor." });
+
 const conversationMessage = z.strictObject({
   role: z.enum(["user", "assistant"]),
   text: z.string().trim().min(1).max(32_000).refine(
@@ -114,12 +150,16 @@ export const sessionImportRequest = z.strictObject({
     ),
     analytics: sessionAnalytics.optional(),
     activity: sessionActivity.optional(),
+    review: sessionReview.optional(),
   }).refine(
     ({ analytics, events }) => !analytics || analytics.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["analytics", "throughLine"], message: "Analytics must cover the last conversation message." },
   ).refine(
     ({ activity, events }) => !activity || activity.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["activity", "throughLine"], message: "Activity must cover the last conversation message." },
+  ).refine(
+    ({ review, events }) => !review || review.throughLine >= (events.at(-1)?.line ?? 0),
+    { path: ["review", "throughLine"], message: "Review must cover the last conversation message." },
   ),
 });
 
@@ -149,6 +189,7 @@ export const sessionDetailResponse = sessionSummaryResponse.extend({
   sourceSessionId: z.uuid(),
   messages: z.array(conversationMessage).min(1).max(MAX_CODEX_IMPORT_EVENTS),
   activity: activityDetail.nullable(),
+  review: reviewDetail.nullable(),
 });
 
 export const syncEnrollmentRequest = z.strictObject({
@@ -166,6 +207,8 @@ export type CodexImportRequest = z.input<typeof sessionImportRequest>;
 export type SessionSource = z.infer<typeof sessionSource>;
 export type SessionAnalytics = z.infer<typeof sessionAnalytics>;
 export type SessionActivity = z.infer<typeof sessionActivity>;
+export type SessionReview = z.infer<typeof sessionReview>;
+export type SafetyFinding = z.infer<typeof safetyFinding>;
 export type ModelTokens = z.infer<typeof modelTokens>;
 export type SessionSummary = z.infer<typeof sessionSummaryResponse>;
 export type SessionDetail = z.infer<typeof sessionDetailResponse>;

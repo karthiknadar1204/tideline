@@ -7,7 +7,7 @@ import type { SessionAnalytics } from "@tideline/contracts";
 
 const run = promisify(execFile);
 
-function remoteIdentity(remote: string | undefined) {
+function parseRemote(remote: string | undefined) {
   if (!remote) return;
   const scp = /^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):([^/].*)$/.exec(remote);
   const url = URL.parse(scp ? `ssh://${scp[1]}/${scp[2]}` : remote);
@@ -16,27 +16,39 @@ function remoteIdentity(remote: string | undefined) {
   const path = url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
   if (!path.includes("/") || /[%\\]/.test(path)) return;
   const host = url.protocol === "ssh:" && url.port === "22" ? url.hostname : url.host;
-  return { key: `remote:${host.toLowerCase()}/${path}`, name: basename(path) };
+  return { host: host.toLowerCase(), path };
 }
 
-export async function readRepository(directory: string): Promise<SessionAnalytics["repository"]> {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
-  async function git(...args: string[]) {
+export function createRepositoryGit(directory: string) {
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_ALLOW_PROTOCOL: "",
+  };
+  return async (...args: string[]) => {
     const result = await run("git", args, {
       cwd: directory, env, timeout: 1_500, maxBuffer: 16_384, windowsHide: true,
     }).catch(() => undefined);
     return result?.stdout.trim();
-  }
+  };
+}
 
+export async function readOrigin(git: ReturnType<typeof createRepositoryGit>) {
+  return parseRemote(await git("config", "--local", "--no-includes", "--get", "remote.origin.url"));
+}
+
+export async function readRepository(directory: string): Promise<SessionAnalytics["repository"]> {
+  const git = createRepositoryGit(directory);
   const rootAndCommon = await git("rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir");
   const [root, common, extra] = rootAndCommon?.split("\n") ?? [];
   if (!root || !common || extra !== undefined) return null;
-  const remote = remoteIdentity(await git("config", "--local", "--no-includes", "--get", "remote.origin.url"));
+  const remote = await readOrigin(git);
   const physical = remote ? undefined : await realpath(common).catch(() => undefined);
-  const identity = remote ?? (physical ? {
+  const identity = remote ? { key: `remote:${remote.host}/${remote.path}`, name: basename(remote.path) } : physical ? {
     key: `local:${physical}`,
     name: basename(physical) === ".git" ? basename(dirname(physical)) : basename(root),
-  } : undefined);
+  } : undefined;
   if (!identity) return null;
   const name = identity.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 100);
   return { key: createHash("sha256").update(identity.key).digest("hex"), name: name || "repository" };

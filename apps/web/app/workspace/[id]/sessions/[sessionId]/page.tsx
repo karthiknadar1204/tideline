@@ -2,6 +2,7 @@ import Link from "next/link";
 import { readWorkspaceSession } from "../../../../../lib/workspace";
 import { SessionActivity } from "../../activity-summary";
 import { RefreshSessions } from "../../refresh-sessions";
+import { SessionReview } from "../../session-review";
 import { SessionUsage } from "../../usage-summary";
 
 export default async function SessionPage({ params }: PageProps<"/workspace/[id]/sessions/[sessionId]">) {
@@ -18,10 +19,12 @@ export default async function SessionPage({ params }: PageProps<"/workspace/[id]
       <header className="mt-10 space-y-2 border-b border-current/15 pb-6">
         <p className="text-sm opacity-75">{agent} session</p>
         <h1 className="text-3xl font-semibold tracking-tight break-words">{session.title}</h1>
-        {session.activity && (
-          <a className="inline-block text-sm underline underline-offset-4" href="#session-activity">
-            Jump to session activity
-          </a>
+        {(session.activity || session.review) && (
+          <nav aria-label="Session sections" className="flex flex-wrap gap-x-4 gap-y-2 text-sm underline underline-offset-4">
+            {session.activity && <a href="#session-activity">Jump to session activity</a>}
+            {session.review && <a href="#session-commits">Git commits</a>}
+            {session.review && <a href="#session-safety">Safety findings</a>}
+          </nav>
         )}
       </header>
       <SessionUsage analytics={session.analytics} />
@@ -34,6 +37,7 @@ export default async function SessionPage({ params }: PageProps<"/workspace/[id]
         ))}
       </ol>
       <SessionActivity activity={session.activity} />
+      <SessionReview review={session.review} />
     </main>
   );
 }

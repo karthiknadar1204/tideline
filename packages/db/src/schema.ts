@@ -1,4 +1,4 @@
-import type { SessionActivity, SessionAnalytics, SessionImportRequest } from "@tideline/contracts";
+import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview } from "@tideline/contracts";
 import { integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const workspaces = pgTable("workspaces", {
@@ -23,6 +23,8 @@ export const agentSessions = pgTable("codex_sessions", {
   readyAnalytics: jsonb("ready_analytics").$type<SessionAnalytics>(),
   pendingActivity: jsonb("pending_activity").$type<SessionActivity>(),
   readyActivity: jsonb("ready_activity").$type<SessionActivity>(),
+  pendingReview: jsonb("pending_review").$type<SessionReview>(),
+  readyReview: jsonb("ready_review").$type<SessionReview>(),
 }, (table) => [
   unique("agent_sessions_workspace_source_unique").on(table.workspaceId, table.source, table.sourceSessionId),
 ]);
