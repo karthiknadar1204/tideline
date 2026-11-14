@@ -2,19 +2,17 @@ import { auth } from "@clerk/nextjs/server";
 import {
   sessionDetailResponse,
   sessionSummariesResponse,
+  workspaceAccess,
   workspaceResponse,
   workspaceSessionSearchResponse,
   workspaceUsageTargets,
 } from "@tideline/contracts";
 import type { WorkspaceNameUpdate, WorkspaceSessionSearchQuery, WorkspaceUsageTargetUpdate } from "@tideline/contracts";
 import { notFound, redirect } from "next/navigation";
+import { cache } from "react";
 import { sessionFilterParams } from "./session-filters";
 
-async function fetchWorkspaceResource(path: string, options: RequestInit = {}) {
-  const { getToken } = await auth.protect();
-  const token = await getToken();
-  if (!token) redirect("/sign-in");
-
+export function fetchTidelineApi(path: string, options: RequestInit = {}) {
   const apiUrl = new URL(process.env.TIDELINE_API_URL ?? "http://127.0.0.1:3001");
   const isLocalHttp = apiUrl.protocol === "http:" &&
     ["localhost", "127.0.0.1", "[::1]"].includes(apiUrl.hostname);
@@ -22,18 +20,25 @@ async function fetchWorkspaceResource(path: string, options: RequestInit = {}) {
     throw new Error("TIDELINE_API_URL must use HTTPS or local HTTP.");
   }
 
-  const headers = new Headers(options.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(new URL(`/v1/workspaces/${path}`, apiUrl), {
+  return fetch(new URL(`/v1${path}`, apiUrl), {
     ...options,
-    headers,
     cache: "no-store",
     redirect: "error",
     signal: AbortSignal.timeout(5_000),
   }).catch(() => null);
+}
+
+export async function fetchWorkspaceResource(path: string, { allowNotFound, ...options }: RequestInit & { allowNotFound?: boolean } = {}) {
+  const { getToken } = await auth.protect();
+  const token = await getToken();
+  if (!token) redirect("/sign-in");
+
+  const headers = new Headers(options.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetchTidelineApi(`/workspaces/${path}`, { ...options, headers });
 
   if (response?.status === 401) redirect("/sign-in");
-  if (response?.status === 404) notFound();
+  if (response?.status === 404 && !allowNotFound) notFound();
   return response;
 }
 
@@ -47,6 +52,10 @@ async function requestWorkspaceResource(path: string, method: "GET" | "POST" = "
 export async function requestWorkspace(path: string, method: "GET" | "POST") {
   return workspaceResponse.parse(await requestWorkspaceResource(path, method));
 }
+
+export const readWorkspaceAccess = cache(async (workspaceId: string) => {
+  return workspaceAccess.parse(await requestWorkspaceResource(encodeURIComponent(workspaceId)));
+});
 
 export async function listWorkspaceSessions(workspaceId: string) {
   return sessionSummariesResponse.parse(

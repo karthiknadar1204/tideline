@@ -18,6 +18,27 @@ export const workspaceNameUpdate = z.strictObject({
 });
 export type WorkspaceNameUpdate = z.infer<typeof workspaceNameUpdate>;
 
+export const teamMemberRole = z.enum(["admin", "member"]);
+export const workspaceRole = z.enum(["owner", ...teamMemberRole.options]);
+export const workspaceKind = z.enum(["personal", "team"]);
+export const workspaceAccess = workspaceResponse.extend({ kind: workspaceKind, role: workspaceRole });
+export const workspaceAccessList = z.array(workspaceAccess);
+export const workspaceInviteRequest = z.strictObject({
+  email: z.string().trim().max(254).toLowerCase().pipe(z.email()),
+  role: teamMemberRole,
+});
+export const workspaceInviteAcceptance = z.strictObject({ token: z.string().regex(/^[0-9a-f]{64}$/) });
+export const workspaceInviteLink = workspaceInviteAcceptance.extend({ id: z.uuid() });
+export const workspaceMemberUpdate = z.strictObject({ role: teamMemberRole });
+export const workspaceTeam = z.strictObject({
+  members: z.array(z.strictObject({ userId: z.string().min(1), email: z.email().nullable(), role: workspaceRole })),
+  invites: z.array(workspaceInviteRequest.extend({ id: z.uuid(), expiresAt: z.iso.datetime() })),
+});
+
+export type WorkspaceAccess = z.infer<typeof workspaceAccess>;
+export type WorkspaceRole = z.infer<typeof workspaceRole>;
+export type TeamMemberRole = z.infer<typeof teamMemberRole>;
+
 export const MAX_CODEX_IMPORT_BYTES = 1_048_576;
 export const MAX_CODEX_IMPORT_EVENTS = 500;
 
@@ -230,6 +251,23 @@ export const sessionDetailResponse = sessionSummaryResponse.extend({
   review: reviewDetail.nullable(),
 });
 
+export const sessionShareToken = z.string().regex(/^tdshare_[0-9a-f]{64}$/);
+
+export const createSessionShareRequest = z.strictObject({
+  messageCount: z.int().positive().max(MAX_CODEX_IMPORT_EVENTS),
+  lastMessageLine: conversationMessage.shape.line,
+});
+
+export const sessionShareStatus = z.strictObject({ token: sessionShareToken.nullable() });
+
+export const sharedSessionSnapshot = z.strictObject({
+  ...sessionDetailResponse.pick({ title: true, source: true, startedAt: true }).shape,
+  messages: z.array(conversationMessage.pick({ role: true, text: true })).min(1).max(MAX_CODEX_IMPORT_EVENTS),
+});
+
+export type CreateSessionShareRequest = z.infer<typeof createSessionShareRequest>;
+export type SharedSessionSnapshot = z.infer<typeof sharedSessionSnapshot>;
+
 export const syncEnrollmentRequest = z.strictObject({
   workspaceId: workspaceResponse.shape.id,
 });
@@ -237,6 +275,7 @@ export const syncEnrollmentRequest = z.strictObject({
 export const syncEnrollmentResponse = z.strictObject({
   token: z.string().regex(/^tdsync_[0-9a-f]{64}$/),
   expiresAt: z.iso.datetime(),
+  userId: z.string().min(1).optional(),
 });
 
 export const cliAccountResponse = z.strictObject({

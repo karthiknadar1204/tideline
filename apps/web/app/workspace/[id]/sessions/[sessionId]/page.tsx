@@ -1,15 +1,20 @@
 import { sessionSourceLabel } from "@tideline/contracts";
 import Link from "next/link";
 import { parseSessionFilters, sessionListHref } from "../../../../../lib/session-filters";
-import { readWorkspaceSession } from "../../../../../lib/workspace";
+import { readSessionShare } from "../../../../../lib/session-shares";
+import { readWorkspaceAccess, readWorkspaceSession } from "../../../../../lib/workspace";
 import { SessionActivity } from "../../activity-summary";
 import { RefreshSessions } from "../../refresh-sessions";
 import { SessionReview } from "../../session-review";
 import { SessionUsage } from "../../usage-summary";
+import { SessionShare } from "./session-share";
 
 export default async function SessionPage({ params, searchParams }: PageProps<"/workspace/[id]/sessions/[sessionId]">) {
   const { id, sessionId } = await params;
-  const session = await readWorkspaceSession(id, sessionId);
+  const [workspace, session] = await Promise.all([readWorkspaceAccess(id), readWorkspaceSession(id, sessionId)]);
+  const mayShare = workspace.role === "owner" || workspace.role === "admin";
+  const share = mayShare ? await readSessionShare(id, sessionId) : undefined;
+  const lastMessage = session.messages.at(-1);
   const agent = sessionSourceLabel[session.source];
   const { filters } = parseSessionFilters(await searchParams);
 
@@ -29,6 +34,12 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
             {session.review && <a href="#session-safety">Safety findings</a>}
           </nav>
         )}
+        {mayShare && lastMessage && <SessionShare
+          workspaceId={id}
+          sessionId={sessionId}
+          displayed={{ messageCount: session.messageCount, lastMessageLine: lastMessage.line }}
+          status={share}
+        />}
       </header>
       <SessionUsage analytics={session.analytics} />
       <ol className="mt-8 space-y-4">

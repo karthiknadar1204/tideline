@@ -6,7 +6,8 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { alias } from "drizzle-orm/pg-core";
-import { agentSessions, syncGrants } from "./schema";
+import { agentSessions, syncGrants, workspaces } from "./schema";
+import { workspaceAccessibleTo } from "./workspaces";
 
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
 type Messages = SessionImportRequest["session"]["events"];
@@ -29,17 +30,27 @@ function activeSyncGrant(tokenHash: string) {
   return and(eq(syncGrants.tokenHash, tokenHash), isNull(syncGrants.revokedAt), gt(syncGrants.expiresAt, sql`clock_timestamp()`));
 }
 
+async function lockAccessibleWorkspace(transaction: Transaction, workspaceId: string, userId: string) {
+  const [locked] = await transaction.select({ id: workspaces.id }).from(workspaces)
+    .where(eq(workspaces.id, workspaceId)).for("no key update");
+  if (!locked) return;
+  const [accessible] = await transaction.select({ kind: workspaces.kind }).from(workspaces)
+    .where(and(eq(workspaces.id, locked.id), workspaceAccessibleTo(userId)));
+  return accessible;
+}
+
 async function receiveSession(
   transaction: Transaction,
   { workspaceId, session }: SessionImportRequest,
   allowAppend: boolean,
+  uploadedBy: string | null,
 ) {
   const { source, sourceSessionId, startedAt, events, analytics, activity, review } = session;
   const messages = source === "codex" ? withoutLegacySkillContext(events) : events;
   if (!messages.length) return null;
   const [created] = await transaction
     .insert(agentSessions)
-    .values({ workspaceId, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity, pendingReview: review })
+    .values({ workspaceId, uploadedBy, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity, pendingReview: review })
     .onConflictDoNothing({ target: [agentSessions.workspaceId, agentSessions.source, agentSessions.sourceSessionId] })
     .returning({ id: agentSessions.id });
 
@@ -49,6 +60,7 @@ async function receiveSession(
 
   const [existing] = await transaction.select({
     id: agentSessions.id,
+    uploadedBy: agentSessions.uploadedBy,
     startedAt: agentSessions.startedAt,
     messages: agentSessions.messages,
     analytics: agentSessions.pendingAnalytics,
@@ -63,6 +75,7 @@ async function receiveSession(
   if (!existing) {
     throw new Error("Import record disappeared before it could be checked.");
   }
+  if (existing.uploadedBy !== uploadedBy) return null;
 
   const priorMessages = source === "codex" && activity && !existing.activity
     ? withoutLegacySkillContext(existing.messages) : existing.messages;
@@ -152,16 +165,25 @@ export function createSessionStore(databaseUrl: string) {
     ) else null end`;
 
   return {
-    async receive(request: SessionImportRequest) {
-      return db.transaction((transaction) => receiveSession(transaction, request, false));
+    async receive(request: SessionImportRequest, userId: string) {
+      return db.transaction(async (transaction) => {
+        const workspace = await lockAccessibleWorkspace(transaction, request.workspaceId, userId);
+        if (!workspace) return;
+        return receiveSession(transaction, request, false, workspace.kind === "team" ? userId : null);
+      });
     },
 
-    async enrollSync({ tokenHash, workspaceId, expiresAt }: {
+    async enrollSync({ tokenHash, workspaceId, userId, expiresAt }: {
       tokenHash: string;
       workspaceId: string;
+      userId: string;
       expiresAt: Date;
     }) {
-      await db.insert(syncGrants).values({ tokenHash, workspaceId, expiresAt });
+      return db.transaction(async (transaction) => {
+        if (!await lockAccessibleWorkspace(transaction, workspaceId, userId)) return false;
+        await transaction.insert(syncGrants).values({ tokenHash, workspaceId, userId, expiresAt });
+        return true;
+      });
     },
 
     async revokeSync(tokenHash: string) {
@@ -180,15 +202,16 @@ export function createSessionStore(databaseUrl: string) {
 
     async receiveSync(tokenHash: string, request: SessionImportRequest) {
       return db.transaction(async (transaction) => {
-        const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId })
+        const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId, userId: syncGrants.userId, kind: workspaces.kind })
           .from(syncGrants)
+          .innerJoin(workspaces, eq(workspaces.id, syncGrants.workspaceId))
           .where(activeSyncGrant(tokenHash))
-          .for("update");
+          .for("update", { of: syncGrants });
 
-        if (!grant) return { kind: "unauthorized" } as const;
+        if (!grant || (grant.kind === "team" && !grant.userId)) return { kind: "unauthorized" } as const;
         if (grant.workspaceId !== request.workspaceId.toLowerCase()) return { kind: "foreign-workspace" } as const;
 
-        const receipt = await receiveSession(transaction, request, true);
+        const receipt = await receiveSession(transaction, request, true, grant.kind === "team" ? grant.userId : null);
         return receipt ? { kind: "accepted", receipt } as const : { kind: "conflict" } as const;
       });
     },

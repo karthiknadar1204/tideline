@@ -3,18 +3,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export function WorkspaceNav({ workspaceId }: { workspaceId: string }) {
+export function WorkspaceNav({ workspaceId, showMembers }: { workspaceId: string; showMembers: boolean }) {
   const base = `/workspace/${workspaceId}`;
   const pathname = usePathname();
   const current = pathname.startsWith(`${base}/sessions/`) ? base : pathname;
   const links = [
     { href: base, label: "Sessions" },
     { href: `${base}/reports`, label: "Reports" },
+    ...(showMembers ? [{ href: `${base}/members`, label: "Members" }] : []),
     { href: `${base}/settings`, label: "Settings" },
   ];
 
   return (
-    <nav aria-label="Workspace sections" className="flex gap-5 border-b border-[var(--workspace-border)] sm:gap-7">
+    <nav aria-label="Workspace sections" className="flex flex-wrap gap-x-3 border-b border-[var(--workspace-border)] min-[360px]:gap-x-5 sm:gap-x-7">
       {links.map(({ href, label }) => (
         <Link
           key={href}

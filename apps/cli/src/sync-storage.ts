@@ -22,6 +22,7 @@ const approvedProjectSchema = z.strictObject({
 const sharedConfig = z.strictObject({
   apiOrigin: z.url(),
   workspaceId: z.uuid(),
+  userId: z.string().min(1).optional(),
   startedAt: z.iso.datetime(),
   expiresAt: syncEnrollmentResponse.shape.expiresAt,
   account: z.uuid(),

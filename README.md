@@ -25,7 +25,7 @@ Open [Tideline](http://localhost:3000) and sign in. **Open workspace** creates o
 bun --env-file=apps/cli/.env.local apps/cli/src/index.ts login
 ```
 
-Sign in with the same Clerk account and approve the request. Tideline saves a 30-day CLI credential in your private local storage. Add `--no-browser` to open the approval link yourself. Run `whoami` to see your account and upload failures. Use `workspace list`, `workspace show`, and `workspace use <id>` to inspect and set the destination. `set-org <id>` also sets the destination. Your account has one personal workspace.
+Sign in with the same Clerk account and approve the request. Tideline saves a 30-day CLI credential in your private local storage. Add `--no-browser` to open the approval link yourself. Run `whoami` to see your account and upload failures. Use `workspace list`, `workspace show`, and `workspace use <id>` to inspect and select a personal or team workspace. `set-org <id>` also selects a workspace.
 
 Run `doctor` to check API connectivity, browser approval, local agent storage, background sync, and upload authorization. Add `--json` to `doctor`, `whoami`, or the workspace list and show commands for scripts. Run `logout` to revoke the CLI credential and any local collector for the same workspace. Pulled files remain on your machine.
 
@@ -82,6 +82,18 @@ bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sql 'SELECT source, cou
 `pull` writes one JSONL file per session and a manifest in a private directory. Omit `--out` to use a new directory under the local Tideline `pulls` folder. The export includes conversation text. Use `--in` with `count` or `sql` to read the export offline. Without search text, `count` counts sessions. With text, it counts matching messages by default. Use `--unit session` to count each matching conversation once and `--field user` or `--field assistant` to search one role.
 
 `sql` runs one read-only `SELECT` or `WITH` query in local SQLite. Its tables are `sessions`, `messages`, `models`, `activity`, `commits`, and `safety_findings`. It prints JSONL by default. Use `--out` with a new `.jsonl` or `.csv` file to save results. Scope larger queries with a repository, source, or date range.
+
+## Create a team workspace
+
+Open **Workspaces**, enter a name under **New team workspace**, and select **Create team workspace**. Open **Members** to choose an email address and role. Copy the invitation link and send it to the teammate. They can join after signing in with that verified email. The invitation expires after seven days.
+
+Members can read and sync sessions and read reports. Admins can also manage workspace settings, invite or remove members, and share sessions. Owners can also assign the admin role. Removing a member ends their team access and revokes their team sync credentials. Each account also has a private personal workspace.
+
+`workspace use` selects the workspace for CLI queries and new collectors. To change the destination of an existing collector, run `sync revoke`, then `sync setup --workspace <id>`.
+
+## Share a session
+
+As the workspace owner or an admin, open a session and review its conversation. Create a link under **Share session**. Anyone with the link can read that snapshot of the conversation. Later messages appear only in the workspace. Revoke the link from the session to end public access.
 
 ## Find a session
 

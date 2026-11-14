@@ -20,12 +20,12 @@ program.command("whoami").description("Show the signed-in account, workspace, an
 program.command("doctor").description("Check sign-in, API connectivity, agent storage, and sync")
   .option("--json", "Print JSON").action(doctor);
 
-const workspace = program.command("workspace").description("Inspect your private workspace");
+const workspace = program.command("workspace").description("List and select your workspaces");
 workspace.command("list").description("List workspaces available to your account").option("--json", "Print JSON").action(listWorkspaces);
 workspace.command("show").description("Show the current workspace").option("--workspace <id>", "Workspace ID")
   .option("--json", "Print JSON").action(showWorkspace);
-workspace.command("use <id>").description("Use your private workspace as the destination").action(selectWorkspace);
-program.command("set-org <id>").description("Use your private workspace as the destination").action(selectWorkspace);
+workspace.command("use <id>").description("Use a workspace as the destination").action(selectWorkspace);
+program.command("set-org <id>").description("Use a workspace as the destination").action(selectWorkspace);
 
 program
   .command("import <file>")
@@ -47,7 +47,7 @@ program.action(() => runSetup({ browser: true }));
 
 function setupOptions(command: Command) {
   return command
-    .option("--workspace <id>", "Destination workspace ID (defaults to your personal workspace)")
+    .option("--workspace <id>", "Destination workspace ID for a new collector (defaults to your selected workspace)")
     .option("--project <directory...>", "Project directories to sync without the picker")
     .option("--history", "Include older sessions in the selected projects")
     .option("--background", "Start the collector in the background")
@@ -57,7 +57,7 @@ function setupOptions(command: Command) {
 }
 
 setupOptions(sync.command("setup").description("Choose repositories, import history, and configure sync")).action(runSetup);
-setupOptions(program.command("connect").description("Connect local repositories to your private workspace")).action(runSetup);
+setupOptions(program.command("connect").description("Connect local repositories to a workspace")).action(runSetup);
 
 async function retry() {
   const { retrySync } = await import("./sync");

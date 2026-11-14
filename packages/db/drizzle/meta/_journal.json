@@ -64,6 +64,20 @@
       "when": 1794666091290,
       "tag": "0008_cli_account_access",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794669065598,
+      "tag": "0009_team_workspaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794669670727,
+      "tag": "0010_team_access_integrity",
+      "breakpoints": true
     }
   ]
 }

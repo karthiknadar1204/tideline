@@ -51,10 +51,11 @@ function ProgressSummary({ name, progress, format }: {
   );
 }
 
-export function UsageTargets({ workspaceId, targets, sessions }: {
+export function UsageTargets({ workspaceId, targets, sessions, canEdit }: {
   workspaceId: string;
   targets: WorkspaceUsageTargets;
   sessions: SessionSummary[];
+  canEdit: boolean;
 }) {
   const { budget, goal } = calculateUsageTargets(sessions, targets);
 
@@ -64,9 +65,9 @@ export function UsageTargets({ workspaceId, targets, sessions }: {
         <section aria-labelledby="usage-budget" className="min-w-0 space-y-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] p-4 sm:p-5">
           <h2 id="usage-budget" className="font-semibold">Usage budget</h2>
           {budget ? <ProgressSummary name="Monthly budget progress" progress={budget} format={formatCost} /> : (
-            <p className="text-sm opacity-75">Set a monthly limit for estimated spend across all agents.</p>
+            <p className="text-sm opacity-75">{canEdit ? "Set a monthly limit for estimated spend across all agents." : "No budget set."}</p>
           )}
-          <UsageBudgetForm key={targets.monthlyBudgetCents ?? "unset"} workspaceId={workspaceId} cents={targets.monthlyBudgetCents} />
+          {canEdit && <UsageBudgetForm key={targets.monthlyBudgetCents ?? "unset"} workspaceId={workspaceId} cents={targets.monthlyBudgetCents} />}
         </section>
         <section aria-labelledby="usage-goal" className="min-w-0 space-y-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] p-4 sm:p-5">
           <h2 id="usage-goal" className="font-semibold">Usage goal</h2>
@@ -76,9 +77,9 @@ export function UsageTargets({ workspaceId, targets, sessions }: {
               <ProgressSummary name="Usage goal progress" progress={goal} format={targets.goal.metric === "cost" ? formatCost : formatCount} />
             </>
           ) : (
-            <p className="text-sm opacity-75">Set a target for reported tokens or estimated spend.</p>
+            <p className="text-sm opacity-75">{canEdit ? "Set a target for reported tokens or estimated spend." : "No goal set."}</p>
           )}
-          <UsageGoalForm key={JSON.stringify(targets.goal)} workspaceId={workspaceId} goal={targets.goal} />
+          {canEdit && <UsageGoalForm key={JSON.stringify(targets.goal)} workspaceId={workspaceId} goal={targets.goal} />}
         </section>
       </div>
       <p className="text-sm opacity-75">

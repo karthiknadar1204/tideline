@@ -1,7 +1,7 @@
 import { UserButton } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requestWorkspace } from "../../../lib/workspace";
+import { readWorkspaceAccess } from "../../../lib/workspace";
 import { WorkspaceNav } from "./workspace-nav";
 
 export const metadata: Metadata = {
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default async function WorkspaceLayout({ children, params }: LayoutProps<"/workspace/[id]">) {
   const { id } = await params;
-  const workspace = await requestWorkspace(encodeURIComponent(id), "GET");
+  const workspace = await readWorkspaceAccess(id);
 
   return (
     <div className="tideline-workspace min-h-dvh bg-[var(--workspace-bg)] text-[var(--workspace-text)]">
@@ -26,11 +26,17 @@ export default async function WorkspaceLayout({ children, params }: LayoutProps<
           >
             {workspace.name}
           </Link>
-          <div className="ml-auto flex min-w-8 shrink-0 items-center justify-end">
+          <div className="ml-auto flex shrink-0 items-center gap-3 sm:gap-5">
+            <Link
+              className="text-sm font-medium text-[var(--workspace-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-4"
+              href="/workspaces"
+            >
+              Workspaces
+            </Link>
             <UserButton />
           </div>
         </header>
-        <WorkspaceNav workspaceId={id} />
+        <WorkspaceNav workspaceId={id} showMembers={workspace.kind === "team"} />
         {children}
       </div>
     </div>

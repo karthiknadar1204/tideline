@@ -1,4 +1,4 @@
-import { cliAccountResponse, cliLoginResponse, workspaceResponse } from "@tideline/contracts";
+import { cliAccountResponse, cliLoginResponse, workspaceAccessList, workspaceResponse } from "@tideline/contracts";
 import { z } from "zod";
 import { approveInBrowser, postToTideline, readJson, requestTideline, tidelineApiOrigin } from "./login";
 import { ensureSyncDirectory, openPrivateDatabase, openSyncStorage, SyncSetupMissingError } from "./sync-storage";
@@ -171,7 +171,8 @@ export async function logout() {
   } finally {
     storage?.close();
   }
-  const ownsCollector = sync && (!config || (sync.apiOrigin === config.apiOrigin && sync.workspaceId === config.account.workspace.id));
+  const ownsCollector = sync && (!config || (sync.apiOrigin === config.apiOrigin && (sync.userId
+    ? sync.userId === config.account.userId : sync.workspaceId === config.account.workspace.id)));
   if (ownsCollector) {
     const { revokeSync } = await import("./sync");
     await revokeSync();
@@ -218,7 +219,8 @@ export async function selectWorkspace(workspace: string) {
 }
 
 export async function listWorkspaces({ json }: { json?: boolean }) {
-  const { account } = await readAccountStatus();
-  if (json) console.info(JSON.stringify([account.workspace]));
-  else console.info(`${account.workspace.name} (${account.workspace.id})`);
+  const client = await openCliAccount();
+  const workspaces = await client.get("/v1/cli/workspaces", workspaceAccessList);
+  if (json) console.info(JSON.stringify(workspaces));
+  else for (const { name, id, role } of workspaces) console.info(`${name} (${id}) · ${role}`);
 }

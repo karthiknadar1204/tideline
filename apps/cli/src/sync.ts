@@ -42,7 +42,7 @@ type SetupOptions = {
 };
 
 const syncRoutes = {
-  enroll: "/v1/cli/sync/enroll",
+  enroll: "/v1/cli/sync/enroll?includeUser=1",
   sessions: "/v1/cli/sync/sessions",
   revoke: "/v1/cli/sync/revoke",
 };
@@ -59,7 +59,7 @@ async function readCurrentSetup() {
   }
 }
 
-async function enrollSync(storage: Storage, options: SetupOptions, settings: Omit<SyncConfig, "workspaceId" | "expiresAt">) {
+async function enrollSync(storage: Storage, options: SetupOptions, settings: Omit<SyncConfig, "workspaceId" | "expiresAt" | "userId">) {
   const accessToken = await approveInBrowser(options.browser);
   let workspaceId = options.workspace;
   if (!workspaceId) {
@@ -74,7 +74,7 @@ async function enrollSync(storage: Storage, options: SetupOptions, settings: Omi
   const enrollment = syncEnrollmentResponse.safeParse(response?.ok ? await readJson(response) : null);
   if (!enrollment.success) throw new Error("Tideline could not enroll sync for this workspace.");
 
-  const config = { ...settings, workspaceId, expiresAt: enrollment.data.expiresAt };
+  const config = { ...settings, workspaceId, expiresAt: enrollment.data.expiresAt, userId: enrollment.data.userId };
   try {
     await storeSyncCredential(storage.directory, config, enrollment.data.token);
     storage.saveConfig(config);

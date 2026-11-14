@@ -31,7 +31,7 @@ export default async function Home() {
             <Link className="underline underline-offset-4" href="/sign-up">Create an account</Link>
           </Show>
           <Show when="signed-in">
-            <Link className="rounded-md border border-current px-4 py-2 font-medium" href="/workspace">Open workspace</Link>
+            <Link className="rounded-md border border-current px-4 py-2 font-medium" href="/workspaces">Open workspace</Link>
           </Show>
         </div>
       </Suspense>
