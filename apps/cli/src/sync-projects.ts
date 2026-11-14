@@ -107,12 +107,13 @@ export async function explicitProjects(paths: string[]): Promise<Checkout[]> {
 export async function chooseProjects(
   roots: AgentRoots,
   previous: ApprovedProject[],
-  options: { workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean },
+  options: { workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean },
 ) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Run in an interactive terminal to choose repositories, or pass --project and --conversations.");
   }
-  intro("Tideline · Repository sync");
+  intro(options.onboarding ? "Set up Tideline" : "Tideline · Repository sync");
+  if (options.onboarding && !options.allowEmpty) log.info("Choose what to sync from this computer, then approve in your browser.");
   const scanning = spinner();
   scanning.start("Finding repositories in local agent history");
   const warnings = new Set<string>();
@@ -139,7 +140,9 @@ export async function chooseProjects(
       repositories.push({ key: checkout.directory, name: basename(checkout.directory), checkouts: new Map([[checkout.directory, checkout]]), sessions: new Map() });
     }
   }
-  if (!repositories.length) throw new Error("Tideline found no repositories with local sessions. Pass --project to select a folder.");
+  if (!repositories.length) {
+    throw new Error("Tideline found no local sessions. Start a session with Codex, Claude Code, Cursor, or OpenCode, then try again. To choose a folder now, pass --project /path/to/repository --conversations.");
+  }
 
   const choices = await autocompleteMultiselect({
     message: "Choose repositories to sync",
@@ -174,6 +177,8 @@ export async function chooseProjects(
   }
   if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
     log.info("Projects already approved for older sessions keep that approval.");
+  } else if (options.onboarding && options.history === undefined) {
+    log.info("You can import existing sessions or start with new sessions only.");
   }
   const history = options.history ?? await confirm({ message: "Import older sessions from these repositories?", initialValue: false });
   if (isCancel(history)) return;

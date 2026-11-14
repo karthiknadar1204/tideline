@@ -1,10 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useTransition } from "react";
+import { teamSecondaryButton } from "../../../lib/team-ui";
 
-export function RefreshSessions() {
+export function RefreshSessions({ showButton = false }: { showButton?: boolean }) {
   const router = useRouter();
+  const [refreshing, startTransition] = useTransition();
 
   useEffect(() => {
     function refreshWhenVisible() {
@@ -20,5 +22,11 @@ export function RefreshSessions() {
     };
   }, [router]);
 
-  return null;
+  if (!showButton) return null;
+
+  return (
+    <button type="button" className={teamSecondaryButton} disabled={refreshing} onClick={() => startTransition(() => router.refresh())}>
+      {refreshing ? "Refreshing…" : "Refresh sessions"}
+    </button>
+  );
 }

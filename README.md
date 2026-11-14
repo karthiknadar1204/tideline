@@ -17,7 +17,18 @@ bun run --filter @tideline/api db:migrate
 bun run dev
 ```
 
-Open [Tideline](http://localhost:3000) and sign in. **Open workspace** creates or opens your personal workspace. The Hono API listens at [127.0.0.1:3001/health](http://127.0.0.1:3001/health). Change `TIDELINE_WEB_ORIGIN` in the API config if you use a different origin for the web app.
+Open [Tideline](http://localhost:3000) and sign in to open your personal workspace. Use **Open workspace** on the landing page to see all your workspaces. The Hono API listens at [127.0.0.1:3001/health](http://127.0.0.1:3001/health). Change `TIDELINE_WEB_ORIGIN` in the API config if you use a different origin for the web app.
+
+## Sync your first session
+
+Build the CLI, then copy the command under **Sync your first session** in your workspace. To start in the terminal with your personal or selected workspace, run these from the checkout.
+
+```sh
+bun run --filter @tideline/cli build
+node --env-file=apps/cli/.env.local apps/cli/dist/index.js onboard
+```
+
+Choose the repositories you want to sync. Choose whether to include older sessions and whether to run in the background, then review the list and approve in your browser. If you leave background sync off, rerun the command with `sync run` in place of `onboard`. If you skip older sessions, start a new coding session in a selected repository. Open the dashboard link printed by the CLI to see it after processing. If you run Tideline at another web origin, set `TIDELINE_WEB_URL` in the CLI environment.
 
 ## Sign in and check your workspace
 

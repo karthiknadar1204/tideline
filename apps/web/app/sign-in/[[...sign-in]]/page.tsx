@@ -1,12 +1,13 @@
 import { SignIn } from "@clerk/nextjs";
 import { Suspense } from "react";
+import { AuthFrame, tidelineAuthAppearance } from "../../auth-frame";
 
 export default function SignInPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthFrame>
       <Suspense>
-        <SignIn fallbackRedirectUrl="/workspace" />
+        <SignIn appearance={tidelineAuthAppearance} fallbackRedirectUrl="/workspace" />
       </Suspense>
-    </div>
+    </AuthFrame>
   );
 }

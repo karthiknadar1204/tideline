@@ -4,7 +4,8 @@ import Form from "next/form";
 import Link from "next/link";
 import { parseSessionFilters, sessionFilterParams, sessionHasFilters, sessionListHref } from "../../../lib/session-filters";
 import { formatCount } from "../../../lib/usage";
-import { searchWorkspaceSessions } from "../../../lib/workspace";
+import { readWorkspaceAccess, searchWorkspaceSessions } from "../../../lib/workspace";
+import { FirstSessionSetup } from "./first-session-setup";
 import { RefreshSessions } from "./refresh-sessions";
 
 const sessionDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
@@ -146,15 +147,23 @@ export default async function WorkspacePage({ params, searchParams }: PageProps<
   const { id } = await params;
   const { filters, invalid } = parseSessionFilters(await searchParams);
   const data = await searchWorkspaceSessions(id, filters);
+  const refresh = !sessionHasFilters(filters) && data.page === 1;
+  const firstSession = refresh && !invalid && filters.page === 1 && data.total === 0
+    ? await readWorkspaceAccess(id)
+    : null;
 
   return (
     <main className="space-y-6 pt-7 sm:pt-9">
-      {!sessionHasFilters(filters) && data.page === 1 && <RefreshSessions />}
       <header>
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Sessions</h1>
       </header>
-      <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} />
-      <SessionList id={id} filters={filters} data={data} />
+      {firstSession ? <FirstSessionSetup workspace={firstSession} /> : (
+        <>
+          {refresh && <RefreshSessions />}
+          <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} />
+          <SessionList id={id} filters={filters} data={data} />
+        </>
+      )}
     </main>
   );
 }

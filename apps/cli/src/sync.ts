@@ -13,7 +13,7 @@ import {
 } from "@tideline/contracts";
 import type { SessionImportRequest } from "@tideline/contracts";
 import { findSessionCommits } from "./commit-links";
-import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
+import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin, tidelineWebOrigin } from "./login";
 import { readRepository } from "./repository";
 import { redactConversationText } from "./session-safety";
 import type { LiveSession, SessionCandidate } from "./session-jsonl";
@@ -39,6 +39,7 @@ type SetupOptions = {
   conversations?: boolean;
   browser: boolean;
   credentialFile?: boolean;
+  onboarding?: boolean;
 };
 
 const syncRoutes = {
@@ -83,6 +84,7 @@ async function enrollSync(storage: Storage, options: SetupOptions, settings: Omi
     await deleteSyncCredential(storage.directory, config).catch(() => {});
     throw new Error("Tideline could not save sync setup. Check access to the credential store and try again.");
   }
+  return workspaceId;
 }
 
 export async function setupSync(options: SetupOptions) {
@@ -92,6 +94,7 @@ export async function setupSync(options: SetupOptions) {
   if (process.platform === "win32") throw new Error("Tideline automatic sync currently requires macOS or Linux.");
   const previous = await readCurrentSetup();
   const apiOrigin = tidelineApiOrigin();
+  const webOrigin = options.onboarding ? tidelineWebOrigin() : undefined;
   if (!options.workspace && !previous) {
     const { approvedWorkspaceDefault } = await import("./cli-account");
     options = { ...options, workspace: await approvedWorkspaceDefault() };
@@ -100,7 +103,9 @@ export async function setupSync(options: SetupOptions) {
       previous.revoked || Date.now() >= Date.parse(previous.expiresAt))) {
     throw new Error("Revoke this collector before changing its workspace or renewing its approval.");
   }
-  if (!previous && !options.credentialFile && process.platform !== "darwin") {
+  const useLocalCredential = options.onboarding && process.platform !== "darwin";
+  const credentialFile = options.credentialFile || useLocalCredential;
+  if (!previous && !credentialFile && process.platform !== "darwin") {
     throw new Error("Use --credential-file to store the sync credential in a private local file on this platform.");
   }
 
@@ -121,6 +126,7 @@ export async function setupSync(options: SetupOptions) {
 
   if (previous) await stopBackgroundSync({ quiet: true });
   const storage = await openSyncStorage({ lock: true, create: true });
+  let workspaceId: string;
   try {
     if (JSON.stringify(storage.config()) !== JSON.stringify(previous)) throw new Error("Sync setup changed. Run tideline sync setup again.");
     const now = new Date().toISOString();
@@ -130,14 +136,17 @@ export async function setupSync(options: SetupOptions) {
     if (previous) {
       const removed = previous.projects.filter((prior) => !retained.includes(prior));
       storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot }, removed);
+      workspaceId = previous.workspaceId;
     } else {
       const sources = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"], sessionSourceLabel.cursor];
       if (roots.openCodeRoot) sources.push(sessionSourceLabel.opencode);
       const destination = options.workspace ? `workspace ${options.workspace}` : "your personal workspace";
       console.info(`Syncing ${projects.length} ${projects.length === 1 ? "project" : "projects"} from ${sources.join(", ")} to ${destination} at ${apiOrigin}.`);
       if (selection.history) console.info("This approval includes older sessions.");
-      await enrollSync(storage, options, {
-        apiOrigin, projects, startedAt: now, account: randomUUID(), credentialStore: options.credentialFile ? "file" : "keychain",
+      if (useLocalCredential) console.info("Tideline will store the sync credential in an owner-only file on this computer.");
+      if (options.onboarding) console.info("Sign in and approve this collector in your browser.");
+      workspaceId = await enrollSync(storage, options, {
+        apiOrigin, projects, startedAt: now, account: randomUUID(), credentialStore: credentialFile ? "file" : "keychain",
         codexRoot: roots.codexRoot, codexArchiveRoot: roots.codexArchiveRoot,
         claudeRoot: roots.claudeRoot, cursorRoot: roots.cursorRoot, openCodeRoot: roots.openCodeRoot,
       });
@@ -147,10 +156,15 @@ export async function setupSync(options: SetupOptions) {
   }
   if (!selection.projects.length) {
     console.info("Uploads are paused. Run tideline enable to choose repositories again.");
-  } else if (selection.background) {
-    await startBackgroundSync();
-  } else {
-    console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
+    return;
+  }
+  if (selection.background) await startBackgroundSync();
+  else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
+
+  if (webOrigin) {
+    console.info(`Open your dashboard at ${new URL(`/workspace/${workspaceId}`, webOrigin).href}`);
+    console.info("Sessions appear in the dashboard after they finish syncing.");
+    if (!selection.history) console.info("Start a new agent session in a selected repository to see it there.");
   }
 }
 
