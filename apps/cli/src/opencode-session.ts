@@ -4,7 +4,7 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { MAX_CODEX_IMPORT_BYTES, MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createProjectScope, sourceSessionUuid } from "./session-jsonl";
-import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { createModelUsage, readModelId } from "./session-usage";
 
@@ -61,7 +61,7 @@ function decode(value: unknown): unknown {
   }
 }
 
-function schema(db: DatabaseSync) {
+function sessionIndex(db: DatabaseSync) {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all().map(({ name }) => name));
   const v2 = tables.has("session_v2") && tables.has("session_message");
   if (!v2 && !(tables.has("session") && tables.has("message") && tables.has("part"))) return;
@@ -74,9 +74,17 @@ function schema(db: DatabaseSync) {
 
   return {
     v2,
+    tables,
     sessions: db.prepare(`${selection} AND time_created >= ? AND id > ? ORDER BY id LIMIT ${sessionPageSize}`),
     session: db.prepare(`${selection} AND id = ? AND directory = ? AND time_created = ?`),
     moved: v2 ? db.prepare("SELECT 1 FROM session_message WHERE session_id = ? AND type = 'location-switched' LIMIT 1") : undefined,
+  };
+}
+
+function conversationStatements(db: DatabaseSync, index: NonNullable<ReturnType<typeof sessionIndex>>) {
+  const { v2, tables } = index;
+  return {
+    ...index,
     latestAssistant: v2 ? db.prepare("SELECT seq FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq DESC LIMIT 1") : undefined,
     messages: v2 ? db.prepare(`SELECT id, type, seq, time_created,
         CASE WHEN length(CAST(data AS BLOB)) <= ${rawRecordLimit} THEN data END AS data
@@ -127,7 +135,7 @@ function collectText(stored: Iterable<unknown>, inline: unknown[] | undefined) {
 
 function projectSession(
   db: DatabaseSync,
-  statements: NonNullable<ReturnType<typeof schema>>,
+  statements: ReturnType<typeof conversationStatements>,
   id: string,
   directory: string,
   projectDirectory: string,
@@ -213,7 +221,7 @@ function projectSession(
   }
 }
 
-async function databaseFiles(root: string) {
+export async function openCodeDatabaseFiles(root: string) {
   const entry = await lstat(root);
   if (await realpath(root) !== root) return [];
   if (entry.isFile()) return [root];
@@ -224,12 +232,23 @@ async function databaseFiles(root: string) {
   return names.sort().map((name) => join(root, name));
 }
 
-export async function* readOpenCodeSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession> {
-  if (!options.projectDirectory || await realpath(options.projectDirectory).catch(() => undefined) !== options.projectDirectory) return;
+export function discoverOpenCodeSessions(root: string): AsyncGenerator<SessionCandidate> {
+  return scanOpenCodeSessions(root);
+}
+
+export function readOpenCodeSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession> {
+  return scanOpenCodeSessions(root, options);
+}
+
+function scanOpenCodeSessions(root: string): AsyncGenerator<SessionCandidate>;
+function scanOpenCodeSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession>;
+async function* scanOpenCodeSessions(root: string, options?: LiveReadOptions): AsyncGenerator<SessionCandidate | LiveSession> {
+  if (options && !options.projectScope &&
+    (!options.projectDirectory || await realpath(options.projectDirectory).catch(() => undefined) !== options.projectDirectory)) return;
   const { DatabaseSync } = await import("node:sqlite");
-  const projectScope = createProjectScope(options.projectDirectory);
+  const projectScope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
   const yielded = new Set<string>();
-  for (const path of await databaseFiles(root)) {
+  for (const path of await openCodeDatabaseFiles(root)) {
     if (!(await lstat(path)).isFile() || await realpath(path) !== path) continue;
     const sidecars = await Promise.all(["-wal", "-shm", "-journal"].map((suffix) => lstat(path + suffix).catch((error) => {
       if (error.code !== "ENOENT") throw error;
@@ -238,11 +257,12 @@ export async function* readOpenCodeSessions(root: string, options: LiveReadOptio
     const db = new DatabaseSync(path, { readOnly: true });
     try {
       db.exec("PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 250");
-      const statements = schema(db);
-      if (!statements) continue;
+      const index = sessionIndex(db);
+      if (!index) continue;
+      const statements = options && conversationStatements(db, index);
       let after = "";
       for (;;) {
-        const page = statements.sessions.all(options.since ?? 0, after);
+        const page = index.sessions.all(options?.since ?? 0, after);
         if (!page.length) break;
         for (const row of page) {
           if (typeof row.id !== "string") continue;
@@ -252,6 +272,16 @@ export async function* readOpenCodeSessions(root: string, options: LiveReadOptio
           if (!id || yielded.has(id) || typeof row.directory !== "string" || created === undefined) continue;
           const projectDirectory = await projectScope(row.directory);
           if (!projectDirectory) continue;
+          const candidate: SessionCandidate = {
+            source: "opencode", sourceSessionId: sourceSessionUuid("opencode", id), startedAt: new Date(created).toISOString(), projectDirectory,
+          };
+          if (!statements) {
+            if (index.moved?.get(id)) continue;
+            yielded.add(id);
+            yield candidate;
+            continue;
+          }
+          if (options?.sessionAllowed?.(candidate) === false) continue;
           const session = projectSession(db, statements, id, row.directory, projectDirectory, created);
           if (!session) continue;
           yielded.add(id);

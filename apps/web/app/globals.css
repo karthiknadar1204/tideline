@@ -3,3 +3,27 @@
 html {
   color-scheme: light dark;
 }
+
+.tideline-workspace {
+  --workspace-bg: #f7f8f7;
+  --workspace-panel: #fff;
+  --workspace-border: #dce2df;
+  --workspace-subtle: #eef2f0;
+  --workspace-text: #182722;
+  --workspace-muted: #52615c;
+  --workspace-accent: #235d4c;
+  --workspace-accent-soft: #e7f0eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tideline-workspace {
+    --workspace-bg: #141b19;
+    --workspace-panel: #19221f;
+    --workspace-border: #33423c;
+    --workspace-subtle: #222f29;
+    --workspace-text: #e7efeb;
+    --workspace-muted: #a9bcb4;
+    --workspace-accent: #a3d4c1;
+    --workspace-accent-soft: #263e34;
+  }
+}

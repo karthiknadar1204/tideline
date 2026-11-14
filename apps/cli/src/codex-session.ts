@@ -2,7 +2,7 @@ import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createCodexActivity } from "./codex-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
-import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { combineTokens, createModelUsage, readModelId, zeroTokens } from "./session-usage";
 
@@ -40,13 +40,37 @@ const messageContent = z.object({ content: z.array(z.unknown()) });
 const textPart = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() });
 const codexContext = /^(?:#\s*agents\.md instructions for\b|<(?:environment_context|user_instructions|permissions instructions|skill|skills_instructions)(?:\s|>))/iu;
 
+function isRootSession(metadata: z.infer<typeof sessionMetadata>) {
+  const { parent_thread_id: parentThread, forked_from_id: forkedFrom, source, thread_source: threadSource } = metadata;
+  const nested = nestedSource.safeParse(source).data;
+  return !parentThread && !forkedFrom && nested?.subagent === undefined && nested?.internal === undefined &&
+    (typeof threadSource !== "string" || threadSource === "user");
+}
+
+export async function discoverCodexSession(path: string): Promise<SessionCandidate | undefined> {
+  for await (const { value } of readJsonl(path, true)) {
+    const record = rolloutRecord.safeParse(value).data;
+    if (record?.type !== "session_meta") return;
+    const metadata = sessionMetadata.safeParse(record.payload).data;
+    const startedAt = rolloutTimestamp.safeParse(record.timestamp).data;
+    if (!metadata || !startedAt || !isRootSession(metadata)) return;
+    const scope = createProjectScope();
+    const projectDirectory = await scope(metadata.cwd);
+    if (!projectDirectory) return;
+    for (const root of metadata.runtime_workspace_roots ?? []) if (!await scope(root)) return;
+    return { source: "codex", sourceSessionId: metadata.id, startedAt, projectDirectory };
+  }
+}
+
 export function readCodexSession(path: string): Promise<SessionProjection>;
 export function readCodexSession(path: string, options: LiveReadOptions): Promise<LiveSession | undefined>;
 export async function readCodexSession(path: string, options?: LiveReadOptions): Promise<SessionProjection | LiveSession | undefined> {
   let session: Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> | undefined;
   const events: SessionProjection["events"] = [];
-  const projectScope = createProjectScope(options?.projectDirectory);
+  const projectScope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
+  const checkoutOf = options?.projectRoot;
   let projectDirectory: string | undefined;
+  let checkout: string | undefined;
   const usage = createModelUsage();
   const safety = options ? createSessionSafety() : undefined;
   const activity = createCodexActivity(safety);
@@ -69,23 +93,24 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       if (!metadata.success || !startedAt.success) {
         throw new Error(`Invalid Codex session metadata at line ${line}.`);
       }
+      const identity: Omit<SessionCandidate, "projectDirectory"> = {
+        source: "codex", sourceSessionId: metadata.data.id, startedAt: startedAt.data,
+      };
       if (options) {
-        const {
-          cwd, parent_thread_id: parentThread, forked_from_id: forkedFrom,
-          runtime_workspace_roots: workspaceRoots, source, thread_source: threadSource,
-        } = metadata.data;
-        const nested = nestedSource.safeParse(source).data;
-        if (parentThread || forkedFrom || nested?.subagent !== undefined || nested?.internal !== undefined ||
-          (typeof threadSource === "string" && threadSource !== "user")) return;
+        if (!isRootSession(metadata.data)) return;
         if (options.since !== undefined && Date.parse(startedAt.data) < options.since) return;
-        projectDirectory = await projectScope(cwd);
+        projectDirectory = await projectScope(metadata.data.cwd);
         if (!projectDirectory) return;
+        checkout = checkoutOf?.(projectDirectory);
+        if (checkoutOf && !checkout) return;
+        if (options.sessionAllowed?.({ ...identity, projectDirectory }) === false) return;
         currentProject = projectDirectory;
-        for (const root of workspaceRoots ?? []) {
-          if (!await projectScope(root)) return;
+        for (const root of metadata.data.runtime_workspace_roots ?? []) {
+          const directory = await projectScope(root);
+          if (!directory || (checkoutOf && checkoutOf(directory) !== checkout)) return;
         }
       }
-      session = { source: "codex", sourceSessionId: metadata.data.id, startedAt: startedAt.data };
+      session = identity;
       continue;
     }
 
@@ -96,7 +121,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
         if (!context.success) return;
         if (context.data.cwd !== undefined) {
           currentProject = await projectScope(context.data.cwd);
-          if (!currentProject) return;
+          if (!currentProject || (checkoutOf && checkoutOf(currentProject) !== checkout)) return;
         }
       }
       activeModel = readModelId(context.data?.model);

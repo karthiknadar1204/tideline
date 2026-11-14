@@ -38,11 +38,28 @@ export async function readOrigin(git: ReturnType<typeof createRepositoryGit>) {
   return parseRemote(await git("config", "--local", "--no-includes", "--get", "remote.origin.url"));
 }
 
-export async function readRepository(directory: string): Promise<SessionAnalytics["repository"]> {
-  const git = createRepositoryGit(directory);
+async function readGitDirectories(git: ReturnType<typeof createRepositoryGit>) {
   const rootAndCommon = await git("rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir");
   const [root, common, extra] = rootAndCommon?.split("\n") ?? [];
   if (!root || !common || extra !== undefined) return null;
+  return { root, common };
+}
+
+export async function readCheckout(directory: string) {
+  const directories = await readGitDirectories(createRepositoryGit(directory));
+  if (!directories) return null;
+  const [root, common] = await Promise.all([
+    realpath(directories.root).catch(() => undefined), realpath(directories.common).catch(() => undefined),
+  ]);
+  if (!root || !common) return null;
+  return { root, common, name: basename(common) === ".git" ? basename(dirname(common)) : basename(root) };
+}
+
+export async function readRepository(directory: string): Promise<SessionAnalytics["repository"]> {
+  const git = createRepositoryGit(directory);
+  const directories = await readGitDirectories(git);
+  if (!directories) return null;
+  const { root, common } = directories;
   const remote = await readOrigin(git);
   const physical = remote ? undefined : await realpath(common).catch(() => undefined);
   const identity = remote ? { key: `remote:${remote.host}/${remote.path}`, name: basename(remote.path) } : physical ? {

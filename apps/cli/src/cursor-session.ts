@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { MAX_CODEX_IMPORT_BYTES, MAX_CODEX_IMPORT_EVENTS } from "@tideline/contracts";
 import { z } from "zod";
 import { createProjectScope, sourceSessionUuid } from "./session-jsonl";
-import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { createModelUsage, readModelId } from "./session-usage";
 
@@ -258,19 +258,30 @@ function readConversation(readValue: ReturnType<typeof valueReader>, id: string,
   return { events, analytics: usage.snapshot(throughLine), evidence: safety.snapshot(throughLine) };
 }
 
-export async function* readCursorSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession> {
-  if (!options.projectDirectory || await realpath(options.projectDirectory).catch(() => undefined) !== options.projectDirectory) return;
+export function discoverCursorSessions(root: string): AsyncGenerator<SessionCandidate> {
+  return scanCursorSessions(root);
+}
+
+export function readCursorSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession> {
+  return scanCursorSessions(root, options);
+}
+
+function scanCursorSessions(root: string): AsyncGenerator<SessionCandidate>;
+function scanCursorSessions(root: string, options: LiveReadOptions): AsyncGenerator<LiveSession>;
+async function* scanCursorSessions(root: string, options?: LiveReadOptions): AsyncGenerator<SessionCandidate | LiveSession> {
+  if (options && !options.projectScope &&
+    (!options.projectDirectory || await realpath(options.projectDirectory).catch(() => undefined) !== options.projectDirectory)) return;
   const physical = await realpath(root).catch(() => undefined);
   if (physical !== root) return;
   const database = await inputDatabase(join(root, "globalStorage", "state.vscdb"));
   if (!database) return;
   try {
-    const scope = createProjectScope(options.projectDirectory);
+    const scope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
     const folders = await readWorkspaceFolders(root);
     if (!hasTable(database, "cursorDiskKV")) return;
     const version = database.prepare("PRAGMA data_version");
     const indexVersion = version.get()?.data_version;
-    const memberships = globalMemberships(database, options.since);
+    const memberships = globalMemberships(database, options?.since);
     await workspaceMemberships(root, folders, memberships);
     const readValue = valueReader(database, "cursorDiskKV");
     for (const [id, records] of memberships) {
@@ -279,7 +290,16 @@ export async function* readCursorSessions(root: string, options: LiveReadOptions
       const projectDirectory = directories[0];
       if (!projectDirectory || directories.some((directory) => directory !== projectDirectory)) continue;
       const indexStart = timestamp(records[0].createdAt ?? records[0].details?.createdAt);
-      if (indexStart !== undefined && options.since !== undefined && indexStart < options.since) continue;
+      const identity: Pick<SessionCandidate, "source" | "sourceSessionId"> = {
+        source: "cursor", sourceSessionId: sourceSessionUuid("cursor", id),
+      };
+      const indexed = indexStart === undefined ? undefined : { ...identity, startedAt: new Date(indexStart).toISOString(), projectDirectory };
+      if (!options) {
+        if (indexed) yield indexed;
+        continue;
+      }
+      if (options.since !== undefined && indexStart !== undefined && indexStart < options.since) continue;
+      if (indexed && options.sessionAllowed?.(indexed) === false) continue;
       let result: LiveSession | undefined;
       database.exec("BEGIN");
       try {
@@ -295,11 +315,13 @@ export async function* readCursorSessions(root: string, options: LiveReadOptions
         }
         const startedAt = indexStart ?? timestamp(details.createdAt);
         if (startedAt === undefined || (options.since !== undefined && startedAt < options.since)) continue;
+        const startedAtIso = indexed?.startedAt ?? new Date(startedAt).toISOString();
+        if (!indexed && options.sessionAllowed?.({ ...identity, startedAt: startedAtIso, projectDirectory }) === false) continue;
         const conversation = readConversation(readValue, id, details, startedAt);
         if (conversation) {
           const { evidence, ...snapshot } = conversation;
           result = { projectDirectory, evidence, session: {
-            source: "cursor", sourceSessionId: sourceSessionUuid("cursor", id), startedAt: new Date(startedAt).toISOString(), ...snapshot,
+            ...identity, startedAt: startedAtIso, ...snapshot,
           } };
         }
       } finally {

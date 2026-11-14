@@ -43,21 +43,23 @@ To send the file, replace `--dry-run` with `--sanitized` and approve in Clerk wi
 
 The importer accepts a single Codex or Claude Code JSONL file up to 1 MiB. It sends user and assistant text with source line numbers and any reported model and token data. PostgreSQL stores the import and its processing result. Sending the same file again returns its existing receipt.
 
-## Sync new agent sessions
+## Choose repositories and sync
 
-From the repository root, choose the absolute path of a project and the ID of your private workspace. Use `--conversations` to approve syncing new sessions in that project. The collector sends user and assistant text, repository and model information, token counts, activity metadata, verified commit references, and safety findings when available. It redacts common credential patterns in messages. Raw tool arguments and results, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Conversation text can still contain sensitive information.
+Run setup from the Tideline checkout. The picker finds repositories and folders in local agent history. Type to search and use the arrow keys and Tab to select. Each entry shows how many saved sessions Tideline found. Related Git worktrees are grouped, and the review lists the exact folders you are approving.
 
 ```sh
-bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup \
-  --workspace "$workspace_id" --project /absolute/path/to/project --conversations
-bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync run
+bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup
 ```
 
-Approve the setup in Clerk, then leave `sync run` running. Tideline checks local session files and databases about every two seconds. The open workspace refreshes its session list every five seconds. Sync starts with sessions created after setup. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Use `sync status` to see queued, received, and failed uploads. Stop the collector with Ctrl+C. Run `sync revoke` with the collector stopped to revoke its upload access.
+Choose whether to include older sessions and whether to sync in the background. Approve in Clerk to use your private workspace, or pass `--workspace` with its ID. On Linux, add `--credential-file`. Run setup again to change the selection. Existing history approvals carry forward for retained folders. Removing a folder stops future uploads from it. Its imported sessions stay in the dashboard.
 
-The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. For Cursor, it reads local IDE SQLite storage under `~/Library/Application Support/Cursor/User` on macOS or `${XDG_CONFIG_HOME:-~/.config}/Cursor/User` on Linux. Use `TIDELINE_CURSOR_USER_DIR` to select a different Cursor User directory. OpenCode uses SQLite under `${XDG_DATA_HOME:-~/.local/share}/opencode`. If OpenCode uses a custom database file, set the same `OPENCODE_DB` when running setup.
+To select paths without the picker, pass `--project /path/to/first /path/to/second --conversations`. Add `--history` to import older sessions and `--background` to start sync immediately. Use `sync start` and `sync stop` to control the background collector. It stays running after the terminal closes. Run `sync start` again after a reboot or if the process exits. Use `sync run` to watch in the current terminal, `sync status` to check upload counts, or `sync revoke` to end this collector’s authorization.
 
-For an approval created before Cursor and OpenCode support, run `sync revoke`, then `sync setup` again to include these sources. Tideline syncs new conversations and later messages from the approved project. Cursor support covers local, single-folder IDE sessions. OpenCode support covers local sessions stored in SQLite. Both sync conversation text, repository information, and any reported model names. OpenCode also syncs available token counts. Cost and activity data are unavailable for these sources. Synced messages retain their original text after edits or deletions in the agent.
+Tideline checks local session files and databases about every two seconds. The dashboard refreshes its session list every five seconds and shows each session’s original date. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Discovery counts can include sessions that exceed these limits or lack enough data to import. The collector sends conversation text and available metadata. Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Tideline redacts common credential patterns in messages.
+
+The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and `archived_sessions` in the same home directory. It reads Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. For Cursor, it reads local IDE SQLite storage under `~/Library/Application Support/Cursor/User` on macOS or `${XDG_CONFIG_HOME:-~/.config}/Cursor/User` on Linux. Use `TIDELINE_CURSOR_USER_DIR` to select a different Cursor User directory. OpenCode uses SQLite under `${XDG_DATA_HOME:-~/.local/share}/opencode`. If OpenCode uses a custom database file, set the same `OPENCODE_DB` when running setup.
+
+For an approval created before Cursor and OpenCode support, run `sync revoke`, then `sync setup` again to include these sources. Cursor support covers local, single-folder IDE sessions. OpenCode support covers local sessions stored in SQLite. Both sync conversation text, repository information, and any reported model names. OpenCode also syncs available token counts. Cost and activity data are unavailable for these sources. Synced messages retain their original text after edits or deletions in the agent.
 
 Tideline stores the local queue under `~/.tideline` by default. A sync credential is tied to one workspace and expires after 30 days. Sync runs on macOS and Linux using Bun or Node.js 22.13 or later. On macOS, the CLI uses Keychain by default. On Linux, pass `--credential-file` to store the credential in an owner-only file. The same option is available on macOS.
 
@@ -71,7 +73,7 @@ Open your private workspace to see reported tokens and estimated cost across ses
 
 ## Set a usage budget or goal
 
-In your private workspace, set a monthly estimated spend budget in USD. Tideline marks a budget as near its limit at 80%, reached at 100%, and over budget above 100%. You can also set a weekly or monthly goal for reported tokens or estimated spend. Choose an upper limit or a minimum target, then apply it to both agents or to one agent.
+In your private workspace, set a monthly estimated spend budget in USD. Tideline marks a budget as near its limit at 80%, reached at 100%, and over budget above 100%. You can also set a weekly or monthly goal for reported tokens or estimated spend. Choose an upper limit or a minimum target, then apply it to all agents or to one agent.
 
 Periods use UTC. Weeks start on Monday. Tideline assigns a session's usage to the period in which the session started. The dashboard updates as sessions sync. If usage data is incomplete, Tideline shows the known amount and marks outcomes it cannot establish as partial or unavailable. Budgets and goals are advisory.
 

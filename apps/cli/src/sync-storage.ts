@@ -11,26 +11,56 @@ import { z } from "zod";
 const execute = promisify(execFile);
 const keychainService = "Tideline sync";
 const maximumQueueBytes = 16 * 1_048_576;
+export const backgroundStartupTimeout = 15_000;
 
-const configSchema = z.strictObject({
+const approvedProjectSchema = z.strictObject({
+  directory: z.string().min(1),
+  since: z.iso.datetime(),
+  git: z.strictObject({ root: z.string().min(1), common: z.string().min(1) }).nullable().optional(),
+});
+
+const sharedConfig = z.strictObject({
   apiOrigin: z.url(),
   workspaceId: z.uuid(),
-  projectDirectory: z.string().min(1),
   startedAt: z.iso.datetime(),
   expiresAt: syncEnrollmentResponse.shape.expiresAt,
   account: z.uuid(),
   credentialStore: z.enum(["file", "keychain"]),
   codexRoot: z.string().min(1),
+  codexArchiveRoot: z.string().min(1).optional(),
   claudeRoot: z.string().min(1),
   cursorRoot: z.string().min(1).optional(),
   openCodeRoot: z.string().min(1).optional(),
   revoked: z.boolean().optional(),
 });
 
+const configSchema = z.union([
+  sharedConfig.extend({ projects: z.array(approvedProjectSchema).min(1) }),
+  sharedConfig.extend({ projectDirectory: z.string().min(1) }).transform(({ projectDirectory, ...config }) => ({
+    ...config,
+    projects: [{ directory: projectDirectory, since: config.startedAt }],
+  })),
+]);
+
+export type ApprovedProject = z.infer<typeof approvedProjectSchema>;
 export type SyncConfig = z.infer<typeof configSchema>;
+
+const backgroundRun = z.object({
+  id: z.uuid(),
+  phase: z.enum(["starting", "running", "stopping", "stopped", "failed"]),
+  startedAt: z.int(),
+});
+
+export class SyncLockError extends Error {}
+export class SyncSetupMissingError extends Error {}
 
 function hasErrorCode(error: unknown, code: string | number) {
   return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+function isLocked(error: unknown) {
+  return error instanceof Error && "code" in error && error.code === "ERR_SQLITE_ERROR" &&
+    "errcode" in error && typeof error.errcode === "number" && [5, 6].includes(error.errcode & 0xff);
 }
 
 async function checkPrivatePath(path: string, type: "directory" | "file") {
@@ -66,16 +96,17 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
   try {
     await checkPrivatePath(directory, "directory");
   } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) throw new Error("Set up Tideline sync first with tideline sync setup.");
+    if (hasErrorCode(error, "ENOENT")) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
     throw error;
   }
 
   const writer = lock ? await openDatabase(directory, "sync-lock.sqlite", true) : undefined;
   try {
     writer?.exec("BEGIN IMMEDIATE");
-  } catch {
+  } catch (error) {
     writer?.close();
-    throw new Error("Tideline sync is already running. Stop it before changing its setup.");
+    if (!isLocked(error)) throw error;
+    throw new SyncLockError("Tideline sync is already running. Stop it before changing its setup.");
   }
 
   let db: DatabaseSync;
@@ -83,7 +114,7 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     db = await openDatabase(directory, "sync.sqlite", create);
   } catch (error) {
     writer?.close();
-    if (hasErrorCode(error, "ENOENT")) throw new Error("Set up Tideline sync first with tideline sync setup.");
+    if (hasErrorCode(error, "ENOENT")) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
     throw error;
   }
   try {
@@ -91,6 +122,12 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       PRAGMA busy_timeout = 1000;
       PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS config (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS background (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        id TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('starting', 'running', 'stopping', 'stopped', 'failed')),
+        started_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS uploads (
         session_key TEXT PRIMARY KEY,
         fingerprint TEXT NOT NULL,
@@ -104,6 +141,9 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'projection'").get()) {
       db.exec("ALTER TABLE uploads ADD COLUMN projection INTEGER NOT NULL DEFAULT 1");
     }
+    if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'project_directory'").get()) {
+      db.exec("ALTER TABLE uploads ADD COLUMN project_directory TEXT");
+    }
   } catch (error) {
     db.close();
     writer?.close();
@@ -112,6 +152,55 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
 
   return {
     directory,
+    background() {
+      const row = db.prepare("SELECT id, phase, started_at AS startedAt FROM background WHERE singleton = 1").get();
+      return row && backgroundRun.parse(row);
+    },
+    reserveBackground(id: string) {
+      db.prepare(`
+        INSERT INTO background (singleton, id, phase, started_at) VALUES (1, ?, 'starting', ?)
+        ON CONFLICT (singleton) DO UPDATE SET id = excluded.id, phase = excluded.phase, started_at = excluded.started_at
+      `).run(id, Date.now());
+    },
+    activateBackground(id: string) {
+      const result = db.prepare(`
+        UPDATE background SET phase = 'running' WHERE id = ? AND phase = 'starting' AND started_at >= ?
+      `).run(id, Date.now() - backgroundStartupTimeout);
+      return Number(result.changes) === 1;
+    },
+    backgroundIsRunning(id: string) {
+      return db.prepare("SELECT 1 FROM background WHERE id = ? AND phase = 'running'").get(id) !== undefined;
+    },
+    requestBackgroundStop(id: string) {
+      db.prepare("UPDATE background SET phase = 'stopping' WHERE id = ? AND phase IN ('starting', 'running')").run(id);
+    },
+    finishBackground(id: string, phase: "stopped" | "failed") {
+      db.prepare(`
+        UPDATE background SET phase = CASE WHEN phase = 'stopping' THEN 'stopped' ELSE ? END
+        WHERE id = ? AND phase IN ('starting', 'running', 'stopping')
+      `).run(phase, id);
+    },
+    prepareForeground() {
+      const row = db.prepare("SELECT started_at FROM background WHERE phase = 'starting'").get();
+      if (row && Date.now() - Number(row.started_at) < backgroundStartupTimeout) return false;
+      db.exec("DELETE FROM background");
+      return true;
+    },
+    async collectorLockHeld() {
+      const probe = await openDatabase(directory, "sync-lock.sqlite", false).catch((error) => {
+        if (!hasErrorCode(error, "ENOENT")) throw error;
+      });
+      if (!probe) return false;
+      try {
+        probe.exec("BEGIN IMMEDIATE");
+        return false;
+      } catch (error) {
+        if (!isLocked(error)) throw error;
+        return true;
+      } finally {
+        probe.close();
+      }
+    },
     config() {
       const row = db.prepare("SELECT value FROM config WHERE id = 1").get();
       return row ? configSchema.parse(JSON.parse(String(row.value))) : undefined;
@@ -119,8 +208,23 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     saveConfig(config: SyncConfig) {
       db.prepare("INSERT INTO config (id, value) VALUES (1, ?)").run(JSON.stringify(config));
     },
+    updateProjects(config: SyncConfig, removed: ApprovedProject[]) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (removed.length) {
+          db.exec("DELETE FROM uploads WHERE phase = 'queued' AND project_directory IS NULL");
+          const remove = db.prepare("DELETE FROM uploads WHERE phase = 'queued' AND project_directory = ?");
+          for (const { directory } of removed) remove.run(directory);
+        }
+        db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify(config));
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
     queue(upload: {
-      sessionKey: string; fingerprint: string; messageCount: number; tailLine: number; body: string; projection: 1 | 2;
+      sessionKey: string; fingerprint: string; messageCount: number; tailLine: number; body: string; projection: 1 | 2; projectDirectory: string;
     }) {
       const existing = db.prepare(
         "SELECT fingerprint, message_count, tail_line, projection FROM uploads WHERE session_key = ?",
@@ -137,13 +241,13 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       if (Number(queued?.bytes ?? 0) + Buffer.byteLength(upload.body) > maximumQueueBytes) return "full";
 
       db.prepare(`
-        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at, projection)
-        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at, projection, project_directory)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
         ON CONFLICT (session_key) DO UPDATE SET
           fingerprint = excluded.fingerprint, message_count = excluded.message_count,
           tail_line = excluded.tail_line, phase = 'queued', body = excluded.body, queued_at = excluded.queued_at,
-          projection = excluded.projection
-      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now(), upload.projection);
+          projection = excluded.projection, project_directory = excluded.project_directory
+      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now(), upload.projection, upload.projectDirectory);
       return "queued";
     },
     pending() {
@@ -163,7 +267,7 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify({ ...config, revoked: true }));
     },
     clear() {
-      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; COMMIT;");
+      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; DELETE FROM background; COMMIT;");
     },
     close() {
       db.close();

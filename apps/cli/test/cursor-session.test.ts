@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { pathToFileURL } from "node:url";
-import { readCursorSessions } from "../src/cursor-session";
+import { discoverCursorSessions, readCursorSessions } from "../src/cursor-session";
 import type { LiveSession } from "../src/session-jsonl";
 
 const startedAt = Date.parse("2026-11-14T09:00:00Z");
@@ -90,6 +90,22 @@ test("Cursor sync reads only recent chats with verified project membership from 
   assert.deepEqual(result.session.analytics?.models, [{ model: "cursor-model", tokens: null }]);
   assert.equal(result.session.analytics?.tokenCoverage, "unavailable");
   assert.equal(result.session.activity, undefined);
+});
+
+test("Cursor discovery uses workspace and conversation headers without loading chat bodies", async (context) => {
+  const cursor = await fixture(context);
+  cursor.database.prepare("INSERT INTO ItemTable VALUES (?, ?)").run("composer.composerHeaders", JSON.stringify({
+    allComposers: [
+      { composerId: "history", createdAt: startedAt - 1_000, workspaceIdentifier: membership(cursor.approved) },
+      { composerId: "child", isSubagent: true, createdAt: startedAt, workspaceIdentifier: membership(cursor.approved) },
+      { composerId: "moved", agentLocationHistory: [{ reason: "moved" }], createdAt: startedAt, workspaceIdentifier: membership(cursor.excluded) },
+    ],
+  }));
+  const candidates = [];
+  for await (const candidate of discoverCursorSessions(cursor.root)) candidates.push(candidate);
+  assert.deepEqual(candidates.map(({ source, startedAt: time, projectDirectory }) => ({ source, time, projectDirectory })), [{
+    source: "cursor", time: new Date(startedAt - 1_000).toISOString(), projectDirectory: cursor.approved,
+  }]);
 });
 
 test("Cursor sync keeps an appendable prefix while the final reply is streaming", async (context) => {

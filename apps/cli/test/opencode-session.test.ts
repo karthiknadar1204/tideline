@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { sessionImportRequest } from "@tideline/contracts";
-import { readOpenCodeSessions } from "../src/opencode-session";
+import { discoverOpenCodeSessions, readOpenCodeSessions } from "../src/opencode-session";
 
 const start = Date.parse("2026-11-14T00:00:00.000Z");
 
@@ -28,6 +28,25 @@ async function projected(root: string, projectDirectory: string) {
   }
   return sessions;
 }
+
+test("OpenCode discovery reads session metadata without a conversation payload column", async (context) => {
+  const { db, project, storage } = await fixture(context, "opencode.db");
+  db.exec(`
+    CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, fork_session_id TEXT, time_created INTEGER);
+    CREATE TABLE session_message (session_id TEXT, type TEXT);
+  `);
+  const insert = db.prepare("INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?)");
+  insert.run("ses_history", project, null, null, start - 1_000);
+  insert.run("ses_child", project, "ses_history", null, start);
+  insert.run("ses_moved", project, null, null, start);
+  db.prepare("INSERT INTO session_message VALUES (?, ?)").run("ses_moved", "location-switched");
+
+  const candidates = [];
+  for await (const candidate of discoverOpenCodeSessions(storage)) candidates.push(candidate);
+  assert.deepEqual(candidates.map(({ source, startedAt, projectDirectory }) => ({ source, startedAt, projectDirectory })), [{
+    source: "opencode", startedAt: new Date(start - 1_000).toISOString(), projectDirectory: project,
+  }]);
+});
 
 test("OpenCode V2 syncs an approved root conversation and extends it after a response completes", async (context) => {
   const { db, database, project, other, storage } = await fixture(context, "opencode-prod.db");

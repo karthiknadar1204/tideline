@@ -7,7 +7,15 @@ import type { SessionImportRequest, SessionSource } from "@tideline/contracts";
 import type { SessionEvidence } from "./session-safety";
 
 export type SessionProjection = SessionImportRequest["session"];
-export type LiveReadOptions = { live: true; projectDirectory?: string; since?: number };
+export type SessionCandidate = Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> & { projectDirectory: string };
+export type LiveReadOptions = {
+  live: true;
+  projectDirectory?: string;
+  projectScope?: (directory: string | undefined) => Promise<string | undefined>;
+  projectRoot?: (directory: string) => string | undefined;
+  sessionAllowed?: (candidate: SessionCandidate) => boolean;
+  since?: number;
+};
 export type LiveSession = { projectDirectory: string; session: SessionProjection; evidence?: SessionEvidence };
 
 export function sourceSessionUuid(source: SessionSource, nativeId: string) {

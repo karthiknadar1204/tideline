@@ -3,20 +3,22 @@ import type { ModelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createClaudeActivity } from "./claude-activity";
 import { createProjectScope, readJsonl } from "./session-jsonl";
-import type { LiveReadOptions, LiveSession, SessionProjection } from "./session-jsonl";
+import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { createModelUsage, readModelId } from "./session-usage";
 
-const claudeRecord = z.object({
+const claudeMetadata = z.object({
   type: z.string(),
   sessionId: z.unknown().optional(),
   timestamp: z.unknown().optional(),
   cwd: z.string().optional(),
   isSidechain: z.boolean().optional(),
+  agentId: z.unknown().optional(),
+});
+const claudeRecord = claudeMetadata.extend({
   isMeta: z.boolean().optional(),
   isCompactSummary: z.boolean().optional(),
   isSynthetic: z.boolean().optional(),
-  agentId: z.unknown().optional(),
   userType: z.string().optional(),
   toolUseResult: z.unknown().optional(),
   sourceToolAssistantUUID: z.unknown().optional(),
@@ -52,6 +54,24 @@ const sessionId = z.uuid();
 const timestamp = z.iso.datetime();
 const injectedText = /<(system-reminder|local-command-[a-z-]+|command-[a-z-]+|task-notification|teammate-message|user-prompt-submit-hook|system_warning|available-deferred-tools)(?:\s[^>]*)?>(?:[\s\S]*?<\/\1\s*>|[\s\S]*$)/giu;
 const interruption = /^\[Request (?:interrupted|aborted|cancell?ed) by user(?: for tool use)?\]$/iu;
+
+function isRootMessage(record: z.infer<typeof claudeMetadata>) {
+  return (record.type === "user" || record.type === "assistant") && !record.isSidechain && !record.agentId;
+}
+
+export async function discoverClaudeSession(path: string): Promise<SessionCandidate | undefined> {
+  for await (const { value } of readJsonl(path, true)) {
+    const record = claudeMetadata.safeParse(value).data;
+    if (!record) return;
+    if (!isRootMessage(record)) continue;
+    const sourceSessionId = sessionId.safeParse(record.sessionId).data;
+    const startedAt = timestamp.safeParse(record.timestamp).data;
+    if (!sourceSessionId || !startedAt) return;
+    const projectDirectory = await createProjectScope()(record.cwd);
+    if (projectDirectory) return { source: "claude-code", sourceSessionId, startedAt, projectDirectory };
+    return;
+  }
+}
 
 function readUsage(value: unknown) {
   const parsed = claudeTokens.safeParse(value);
@@ -91,8 +111,10 @@ export function readClaudeSession(path: string, options: LiveReadOptions): Promi
 export async function readClaudeSession(path: string, options?: LiveReadOptions): Promise<SessionProjection | LiveSession | undefined> {
   let session: Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> | undefined;
   const events: SessionProjection["events"] = [];
-  const projectScope = createProjectScope(options?.projectDirectory);
+  const projectScope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
+  const checkoutOf = options?.projectRoot;
   let projectDirectory: string | undefined;
+  let checkout: string | undefined;
   const usage = createModelUsage();
   const safety = options ? createSessionSafety() : undefined;
   const activity = createClaudeActivity(safety);
@@ -103,7 +125,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     const parsed = claudeRecord.safeParse(value);
     if (!parsed.success) throw new Error(`Invalid Claude Code record at line ${line}.`);
     const record = parsed.data;
-    if ((record.type !== "user" && record.type !== "assistant") || record.isSidechain || record.agentId) continue;
+    if (!isRootMessage(record)) continue;
 
     const id = sessionId.safeParse(record.sessionId);
     const at = timestamp.safeParse(record.timestamp);
@@ -117,7 +139,14 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       if (!session && options.since !== undefined && Date.parse(at.data) < options.since) return;
       const directory = await projectScope(record.cwd);
       if (!directory) return;
-      projectDirectory ??= directory;
+      if (!session) {
+        checkout = checkoutOf?.(directory);
+        if (checkoutOf && !checkout) return;
+        if (options.sessionAllowed?.({ source: "claude-code", sourceSessionId: id.data, startedAt: at.data, projectDirectory: directory }) === false) return;
+        projectDirectory = directory;
+      } else if (checkoutOf && checkoutOf(directory) !== checkout) {
+        return;
+      }
       inProject = directory === projectDirectory;
     }
     session ??= { source: "claude-code", sourceSessionId: id.data, startedAt: at.data };

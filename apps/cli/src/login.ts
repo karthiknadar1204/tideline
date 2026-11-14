@@ -184,21 +184,23 @@ export async function approveInBrowser(browser: boolean) {
   return pollForToken({ tokenEndpoint, clientId, device: device.data, expiresAt });
 }
 
-export function postToTideline({ apiOrigin, path, accessToken, body }: {
+export function postToTideline({ apiOrigin, path, accessToken, body, signal }: {
   apiOrigin: string;
   path: string;
   accessToken: string;
   body?: string;
+  signal?: AbortSignal;
 }) {
   const headers = new Headers({ Authorization: `Bearer ${accessToken}` });
   if (body !== undefined) headers.set("Content-Type", "application/json");
 
+  const timeout = AbortSignal.timeout(requestTimeout);
   return fetch(new URL(path, apiOrigin), {
     method: "POST",
     headers,
     body,
     redirect: "manual",
-    signal: AbortSignal.timeout(requestTimeout),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   }).catch(() => null);
 }
 

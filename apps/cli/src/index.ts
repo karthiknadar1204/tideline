@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { importSession } from "./import";
 import { login } from "./login";
 
@@ -23,27 +23,45 @@ program
   .option("--no-browser", "Show the approval link without opening your browser")
   .action(importSession);
 
-const sync = program.command("sync").description("Automatically sync new sessions from a selected project");
+const sync = program.command("sync").description("Automatically sync sessions from selected projects");
+const runSetup = async (options: Parameters<typeof import("./sync").setupSync>[0]) => {
+  const { setupSync } = await import("./sync");
+  await setupSync(options);
+};
+
+program.action(() => runSetup({ browser: true }));
 
 sync
   .command("setup")
-  .description("Approve conversation sync for one project and workspace")
-  .requiredOption("--workspace <id>", "Destination personal workspace ID")
-  .requiredOption("--project <directory>", "Project directory to sync")
-  .option("--conversations", "Allow conversation text, usage, activity, commit links, and safety findings from new sessions")
+  .description("Choose repositories, import history, and configure sync")
+  .option("--workspace <id>", "Destination workspace ID (defaults to your personal workspace)")
+  .option("--project <directory...>", "Project directories to sync without the picker")
+  .option("--history", "Include older sessions in the selected projects")
+  .option("--background", "Start the collector in the background")
+  .option("--conversations", "Approve uploading conversations and available metadata from --project")
   .option("--credential-file", "Use an owner-only file in place of the system keychain")
   .option("--no-browser", "Show the approval link without opening your browser")
+  .action(runSetup);
+
+sync.command("run")
+  .description("Sync Codex, Claude Code, Cursor, and OpenCode in this terminal")
+  .addOption(new Option("--background-id <id>").hideHelp())
   .action(async (options) => {
-    const { setupSync } = await import("./sync");
-    await setupSync(options);
+    const { runSync } = await import("./sync");
+    await runSync({ backgroundId: options.backgroundId });
   });
 
-sync.command("run").description("Watch for new Codex, Claude Code, Cursor, and OpenCode sessions").action(async () => {
-  const { runSync } = await import("./sync");
-  await runSync();
+sync.command("start").description("Start sync in the background").action(async () => {
+  const { startBackgroundSync } = await import("./sync-background");
+  await startBackgroundSync();
 });
 
-sync.command("status").description("Show the selected project and sync status").action(async () => {
+sync.command("stop").description("Stop background sync").action(async () => {
+  const { stopBackgroundSync } = await import("./sync-background");
+  await stopBackgroundSync();
+});
+
+sync.command("status").description("Show selected projects and upload status").action(async () => {
   const { syncStatus } = await import("./sync");
   await syncStatus();
 });
