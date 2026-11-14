@@ -18,6 +18,33 @@ export const MAX_CODEX_IMPORT_EVENTS = 500;
 
 export const sessionSource = z.enum(["codex", "claude-code"]);
 
+export const usageTargetCents = z.int().positive().max(2_000_000_000);
+const usageGoalScope = z.enum(["all", ...sessionSource.options]);
+const usageGoalFields = {
+  scope: usageGoalScope,
+  period: z.enum(["week", "month"]),
+  direction: z.enum(["at-most", "at-least"]),
+};
+
+export const usageGoal = z.discriminatedUnion("metric", [
+  z.strictObject({ ...usageGoalFields, metric: z.literal("tokens"), target: z.int().positive().max(1_000_000_000_000) }),
+  z.strictObject({ ...usageGoalFields, metric: z.literal("cost"), target: usageTargetCents }),
+]);
+
+export const workspaceUsageTargets = z.strictObject({
+  monthlyBudgetCents: usageTargetCents.nullable(),
+  goal: usageGoal.nullable(),
+});
+
+export const workspaceUsageTargetUpdate = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("budget"), value: workspaceUsageTargets.shape.monthlyBudgetCents }),
+  z.strictObject({ kind: z.literal("goal"), value: workspaceUsageTargets.shape.goal }),
+]);
+
+export type UsageGoal = z.infer<typeof usageGoal>;
+export type WorkspaceUsageTargets = z.infer<typeof workspaceUsageTargets>;
+export type WorkspaceUsageTargetUpdate = z.infer<typeof workspaceUsageTargetUpdate>;
+
 const repository = z.strictObject({
   key: z.string().regex(/^[0-9a-f]{64}$/),
   name: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),

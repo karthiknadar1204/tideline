@@ -41,7 +41,7 @@ function toMetric(value: number | null, complete: boolean): Metric {
   return value === null ? { value: null, complete: false } : { value, complete };
 }
 
-function combineUsage(entries: Usage[]): Usage {
+export function combineUsage(entries: Usage[]): Usage {
   return {
     tokens: combineMetrics(entries.map((entry) => entry.tokens)),
     cost: combineMetrics(entries.map((entry) => entry.cost)),

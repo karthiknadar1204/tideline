@@ -43,6 +43,13 @@
       "when": 1794658331014,
       "tag": "0005_agent_session_review",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794659215107,
+      "tag": "0006_workspace_usage_targets",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import {
   syncEnrollmentRequest,
   syncEnrollmentResponse,
   workspaceResponse,
+  workspaceUsageTargetUpdate,
 } from "@tideline/contracts";
 import type { WorkspaceResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
@@ -110,6 +111,31 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "Workspace not found." }, 404);
     }
     return context.json(workspace satisfies WorkspaceResponse);
+  });
+
+  routes.get("/workspaces/:id/usage-targets", async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    if (!id.success) return context.json({ error: "Workspace not found." }, 404);
+
+    const targets = await workspaces.readUsageTargets({ workspaceId: id.data, ownerId: context.get("ownerId") });
+    if (!targets) return context.json({ error: "Workspace not found." }, 404);
+    return context.json(targets);
+  });
+
+  routes.patch("/workspaces/:id/usage-targets", bodyLimit({
+    maxSize: 2_048,
+    onError: (context) => context.json({ error: "Budget or goal exceeds the size limit." }, 413),
+  }), async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    if (!id.success) return context.json({ error: "Workspace not found." }, 404);
+
+    const body: unknown = await context.req.json().catch(() => null);
+    const update = workspaceUsageTargetUpdate.safeParse(body);
+    if (!update.success) return context.json({ error: "Expected a valid budget or goal." }, 400);
+
+    const targets = await workspaces.updateUsageTarget({ workspaceId: id.data, ownerId: context.get("ownerId") }, update.data);
+    if (!targets) return context.json({ error: "Workspace not found." }, 404);
+    return context.json(targets);
   });
 
   routes.get("/workspaces/:workspaceId/sessions", async (context) => {

@@ -1,10 +1,12 @@
-import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview } from "@tideline/contracts";
+import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, UsageGoal } from "@tideline/contracts";
 import { integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").defaultRandom().primaryKey(),
   ownerId: text("owner_id").notNull().unique(),
   name: text("name").notNull().default("Personal workspace"),
+  monthlyBudgetCents: integer("monthly_budget_cents"),
+  usageGoal: jsonb("usage_goal").$type<UsageGoal>(),
 });
 
 export const sessionSource = pgEnum("session_source", ["codex", "claude-code"]);

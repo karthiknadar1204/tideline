@@ -65,6 +65,12 @@ Open your private workspace to see reported tokens and estimated cost across ses
 
 **Partial** shows the subtotal Tideline can count or price. **Unavailable** means the session lacks the data needed for that number. A session counts once in the workspace totals and once on each model row that it used. Older sessions may have only conversation text.
 
+## Set a usage budget or goal
+
+In your private workspace, set a monthly estimated spend budget in USD. Tideline marks a budget as near its limit at 80%, reached at 100%, and over budget above 100%. You can also set a weekly or monthly goal for reported tokens or estimated spend. Choose an upper limit or a minimum target, then apply it to both agents or to one agent.
+
+Periods use UTC. Weeks start on Monday. Tideline assigns a session's usage to the period in which the session started. The dashboard updates as sessions sync. If usage data is incomplete, Tideline shows the known amount and marks outcomes it cannot establish as partial or unavailable. Budgets and goals are advisory.
+
 ## Read session activity
 
 Open a session to see tool calls, reported skill use, and child agent runs. **Returned** means a tool produced a result. A child run can stay **Running** after its launch tool returns. Tideline uses the parent session log and shows the latest status it can confirm. Each session includes up to 250 entries per activity category. Workspace totals show activity from sessions that have synced it.
