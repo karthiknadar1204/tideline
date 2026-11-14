@@ -1,8 +1,8 @@
-import type { WorkspaceUsageTargetUpdate, WorkspaceUsageTargets } from "@tideline/contracts";
-import { and, eq } from "drizzle-orm";
+import type { CliAccount, WorkspaceUsageTargetUpdate, WorkspaceUsageTargets } from "@tideline/contracts";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { workspaces } from "./schema";
+import { cliGrants, workspaces } from "./schema";
 
 type WorkspaceOwner = { workspaceId: string; ownerId: string };
 
@@ -57,6 +57,26 @@ export function createWorkspaceStore(databaseUrl: string) {
         .where(ownedWorkspace(owner))
         .returning(usageTargetFields);
       return targets;
+    },
+
+    async enrollCli(tokenHash: string, workspaceId: string, expiresAt: Date) {
+      await db.insert(cliGrants).values({ tokenHash, workspaceId, expiresAt });
+    },
+
+    async findCliAccount(tokenHash: string): Promise<CliAccount | undefined> {
+      const [account] = await db.select({ userId: workspaces.ownerId, workspace: workspaceFields })
+        .from(cliGrants)
+        .innerJoin(workspaces, eq(cliGrants.workspaceId, workspaces.id))
+        .where(and(eq(cliGrants.tokenHash, tokenHash), isNull(cliGrants.revokedAt), gt(cliGrants.expiresAt, sql`clock_timestamp()`)));
+      return account;
+    },
+
+    async revokeCli(tokenHash: string) {
+      const [grant] = await db.update(cliGrants)
+        .set({ revokedAt: sql`coalesce(${cliGrants.revokedAt}, now())` })
+        .where(eq(cliGrants.tokenHash, tokenHash))
+        .returning({ tokenHash: cliGrants.tokenHash });
+      return Boolean(grant);
     },
   };
 }

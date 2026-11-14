@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import { codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel } from "@tideline/contracts";
-import type { SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
-import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel } from "@tideline/contracts";
+import type { CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary } from "@tideline/contracts";
+import { and, asc, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { alias } from "drizzle-orm/pg-core";
 import { agentSessions, syncGrants } from "./schema";
 
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
@@ -22,6 +23,10 @@ function countActivity(activity: SessionActivity | null): SessionSummary["activi
     children: activity.children.length,
     truncated: activity.truncated,
   };
+}
+
+function activeSyncGrant(tokenHash: string) {
+  return and(eq(syncGrants.tokenHash, tokenHash), isNull(syncGrants.revokedAt), gt(syncGrants.expiresAt, sql`clock_timestamp()`));
 }
 
 async function receiveSession(
@@ -168,15 +173,16 @@ export function createSessionStore(databaseUrl: string) {
       return Boolean(grant);
     },
 
+    async readSyncGrant(tokenHash: string) {
+      const [grant] = await db.select({ workspaceId: syncGrants.workspaceId }).from(syncGrants).where(activeSyncGrant(tokenHash));
+      return grant;
+    },
+
     async receiveSync(tokenHash: string, request: SessionImportRequest) {
       return db.transaction(async (transaction) => {
         const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId })
           .from(syncGrants)
-          .where(and(
-            eq(syncGrants.tokenHash, tokenHash),
-            isNull(syncGrants.revokedAt),
-            gt(syncGrants.expiresAt, sql`clock_timestamp()`),
-          ))
+          .where(activeSyncGrant(tokenHash))
           .for("update");
 
         if (!grant) return { kind: "unauthorized" } as const;
@@ -191,6 +197,26 @@ export function createSessionStore(databaseUrl: string) {
       return db.select({ ...summaryFields, activityCounts }).from(agentSessions)
         .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0)))
         .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id));
+    },
+
+    async pageReady(workspaceId: string, { repo, source, from, to, after }: CliSessionListQuery) {
+      const cursor = alias(agentSessions, "session_cursor");
+      const cursorKey = after === undefined ? undefined : db.select({ receivedAt: cursor.receivedAt, id: cursor.id }).from(cursor)
+        .where(and(eq(cursor.workspaceId, workspaceId), eq(cursor.id, after)));
+      const rows = await db.select({ ...summaryFields, activityCounts }).from(agentSessions)
+        .where(and(
+          eq(agentSessions.workspaceId, workspaceId),
+          gt(agentSessions.readyMessageCount, 0),
+          repo === undefined ? undefined : sql`lower(${agentSessions.readyAnalytics} -> 'repository' ->> 'name') = ${repo.toLowerCase()}`,
+          source === undefined ? undefined : eq(agentSessions.source, source),
+          from === undefined ? undefined : gte(agentSessions.startedAt, from),
+          to === undefined ? undefined : sql`left(${agentSessions.startedAt}, 10) <= ${to}`,
+          cursorKey === undefined ? undefined : sql`(${agentSessions.receivedAt}, ${agentSessions.id}) < (${cursorKey})`,
+        ))
+        .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id))
+        .limit(CLI_SESSION_PAGE_SIZE + 1);
+      const sessions = rows.slice(0, CLI_SESSION_PAGE_SIZE);
+      return { sessions, nextCursor: rows.length > sessions.length ? sessions[CLI_SESSION_PAGE_SIZE - 1].id : null };
     },
 
     async findReady(workspaceId: string, sessionId: string) {

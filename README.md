@@ -19,17 +19,19 @@ bun run dev
 
 Open [Tideline](http://localhost:3000) and sign in. **Open workspace** creates or opens your personal workspace. The Hono API listens at [127.0.0.1:3001/health](http://127.0.0.1:3001/health). Change `TIDELINE_WEB_ORIGIN` in the API config if you use a different origin for the web app.
 
-## Approve the CLI in your browser
+## Sign in and check your workspace
 
 ```sh
-bun --cwd apps/cli ./src/index.ts login
+bun --env-file=apps/cli/.env.local apps/cli/src/index.ts login
 ```
 
-Sign in with the same Clerk account and approve the request. The terminal prints the name and ID of your workspace. Add `--no-browser` to open the approval link yourself. The command verifies approval for this run and discards the OAuth token.
+Sign in with the same Clerk account and approve the request. Tideline saves a 30-day CLI credential in your private local storage. Add `--no-browser` to open the approval link yourself. Run `whoami` to see your account and upload failures. Use `workspace list`, `workspace show`, and `workspace use <id>` to inspect and set the destination. `set-org <id>` also sets the destination. Your account has one personal workspace.
+
+Run `doctor` to check API connectivity, browser approval, local agent storage, background sync, and upload authorization. Add `--json` to `doctor`, `whoami`, or the workspace list and show commands for scripts. Run `logout` to revoke the CLI credential and any local collector for the same workspace. Pulled files remain on your machine.
 
 ## Import a sanitized session
 
-Open your personal workspace and copy its ID from `/workspace/<id>`. Use the included synthetic fixture for a first import. For any other file, review the conversation text and remove private data before confirming with `--sanitized`.
+Sign in with `login` to use your selected workspace, or copy the ID from `/workspace/<id>` and pass `--workspace`. Use the included synthetic fixture for a first import. For any other file, review the conversation text and remove private data before confirming with `--sanitized`.
 
 From the repository root, set `workspace_id` to the copied ID and run a preview.
 
@@ -53,6 +55,8 @@ bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup
 
 Choose whether to include older sessions and whether to sync in the background. Approve in Clerk to use your private workspace, or pass `--workspace` with its ID. On Linux, add `--credential-file`. Run setup again to change the selection. Existing history approvals carry forward for retained folders. Removing a folder stops future uploads from it. Its imported sessions stay in the dashboard.
 
+You can also open the picker with `upload`, `connect`, `enable`, or `disable`. To pause every repository, clear the selection and confirm. Use `sync retry` or `upload --retry` to resend queued uploads and recover failed ones from approved local sessions. An active collector picks up the request. When sync is stopped, the command attempts the retry directly. Use `sync status` to see what still needs attention.
+
 To select paths without the picker, pass `--project /path/to/first /path/to/second --conversations`. Add `--history` to import older sessions and `--background` to start sync immediately. Use `sync start` and `sync stop` to control the background collector. It stays running after the terminal closes. Run `sync start` again after a reboot or if the process exits. Use `sync run` to watch in the current terminal, `sync status` to check upload counts, or `sync revoke` to end this collector’s authorization.
 
 Tideline checks local session files and databases about every two seconds. The dashboard refreshes its session list every five seconds and shows each session’s original date. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Discovery counts can include sessions that exceed these limits or lack enough data to import. The collector sends conversation text and available metadata. Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Tideline redacts common credential patterns in messages.
@@ -64,6 +68,20 @@ For an approval created before Cursor and OpenCode support, run `sync revoke`, t
 Tideline stores the local queue under `~/.tideline` by default. A sync credential is tied to one workspace and expires after 30 days. Sync runs on macOS and Linux using Bun or Node.js 22.13 or later. On macOS, the CLI uses Keychain by default. On Linux, pass `--credential-file` to store the credential in an owner-only file. The same option is available on macOS.
 
 To preview a manual Claude Code import, pass `--source claude-code` to the import command. If Bun is unavailable on your PATH, replace `bun` in the commands above with `npx --yes --package=bun@1.4.4 -- bun`.
+
+## Export and query synced sessions
+
+Sign in with `login` first. `pull`, `count`, and `sql` accept `--repo`, `--source`, `--from`, and `--to`. The dates are inclusive UTC days in `YYYY-MM-DD` format. The workspace defaults to your selected workspace.
+
+```sh
+bun --env-file=apps/cli/.env.local apps/cli/src/index.ts pull --repo my-repo --out ./tideline-export
+bun --env-file=apps/cli/.env.local apps/cli/src/index.ts count "test failed" --in ./tideline-export --ignore-case
+bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sql 'SELECT source, count(*) AS total FROM sessions GROUP BY source' --in ./tideline-export
+```
+
+`pull` writes one JSONL file per session and a manifest in a private directory. Omit `--out` to use a new directory under the local Tideline `pulls` folder. The export includes conversation text. Use `--in` with `count` or `sql` to read the export offline. Without search text, `count` counts sessions. With text, it counts matching messages by default. Use `--unit session` to count each matching conversation once and `--field user` or `--field assistant` to search one role.
+
+`sql` runs one read-only `SELECT` or `WITH` query in local SQLite. Its tables are `sessions`, `messages`, `models`, `activity`, `commits`, and `safety_findings`. It prints JSONL by default. Use `--out` with a new `.jsonl` or `.csv` file to save results. Scope larger queries with a repository, source, or date range.
 
 ## Read the usage summaries
 

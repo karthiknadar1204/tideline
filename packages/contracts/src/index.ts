@@ -234,6 +234,41 @@ export const syncEnrollmentResponse = z.strictObject({
   expiresAt: z.iso.datetime(),
 });
 
+export const cliAccountResponse = z.strictObject({
+  userId: z.string().min(1),
+  workspace: workspaceResponse,
+});
+
+export const cliLoginResponse = z.strictObject({
+  token: z.string().regex(/^tdcli_[0-9a-f]{64}$/),
+  expiresAt: z.iso.datetime(),
+  account: cliAccountResponse,
+});
+
+const cliSessionFilterFields = {
+  repo: repository.shape.name.optional(),
+  source: sessionSource.optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+};
+
+function validDateRange({ from, to }: { from?: string; to?: string }) {
+  return !from || !to || from <= to;
+}
+
+export const cliSessionFilters = z.strictObject(cliSessionFilterFields).refine(validDateRange);
+export const cliSessionListQuery = z.strictObject({
+  ...cliSessionFilterFields,
+  after: z.uuid().optional(),
+}).refine(validDateRange);
+
+export const CLI_SESSION_PAGE_SIZE = 100;
+
+export const cliSessionPageResponse = z.strictObject({
+  sessions: sessionSummariesResponse.max(CLI_SESSION_PAGE_SIZE),
+  nextCursor: z.uuid().nullable(),
+});
+
 export const codexImportRequest = sessionImportRequest;
 export type SessionImportRequest = z.infer<typeof sessionImportRequest>;
 export type CodexImportRequest = z.input<typeof sessionImportRequest>;
@@ -245,3 +280,5 @@ export type SafetyFinding = z.infer<typeof safetyFinding>;
 export type ModelTokens = z.infer<typeof modelTokens>;
 export type SessionSummary = z.infer<typeof sessionSummaryResponse>;
 export type SessionDetail = z.infer<typeof sessionDetailResponse>;
+export type CliAccount = z.infer<typeof cliAccountResponse>;
+export type CliSessionListQuery = z.infer<typeof cliSessionListQuery>;

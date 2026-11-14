@@ -107,7 +107,7 @@ export async function explicitProjects(paths: string[]): Promise<Checkout[]> {
 export async function chooseProjects(
   roots: AgentRoots,
   previous: ApprovedProject[],
-  options: { workspace?: string; history?: boolean; background?: boolean },
+  options: { workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean },
 ) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Run in an interactive terminal to choose repositories, or pass --project and --conversations.");
@@ -157,7 +157,7 @@ export async function chooseProjects(
         ].join(" · ")),
       };
     }),
-    required: true,
+    required: !options.allowEmpty,
     initialValues: repositories.flatMap(({ checkouts }, index) => [...checkouts.values()].every((checkout) => {
       const prior = priorByPath.get(checkout.directory);
       return prior && sameCheckout(prior, checkout);
@@ -167,6 +167,11 @@ export async function chooseProjects(
   if (isCancel(choices)) return;
   const selected = choices.map((index) => repositories[index]);
   const projects = [...new Map(selected.flatMap(({ checkouts }) => [...checkouts])).values()];
+  if (!projects.length) {
+    const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
+    if (isCancel(approve) || !approve) return;
+    return { projects, history: false, background: false };
+  }
   if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
     log.info("Projects already approved for older sessions keep that approval.");
   }

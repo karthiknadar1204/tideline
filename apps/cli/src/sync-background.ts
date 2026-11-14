@@ -47,6 +47,7 @@ export async function startBackgroundSync() {
   try {
     const config = storage.config();
     if (!config) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
+    if (!config.projects.length) throw new Error("Choose repositories with tideline enable before starting sync.");
     if (config.apiOrigin !== tidelineApiOrigin()) throw new Error("TIDELINE_API_URL differs from the approved sync destination.");
     if (config.revoked || Date.now() >= Date.parse(config.expiresAt)) {
       throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");

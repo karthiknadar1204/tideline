@@ -1,10 +1,11 @@
 import { MAX_CODEX_IMPORT_BYTES, sessionImportRequest, codexImportResponse, sessionSourceLabel } from "@tideline/contracts";
 import { readClaudeSession } from "./claude-session";
+import { approvedWorkspaceDefault } from "./cli-account";
 import { readCodexSession } from "./codex-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
 
 type ImportOptions = {
-  workspace: string;
+  workspace?: string;
   source: string;
   browser: boolean;
   sanitized?: boolean;
@@ -12,8 +13,8 @@ type ImportOptions = {
 };
 
 export async function importSession(file: string, options: ImportOptions) {
-  const workspaceId = sessionImportRequest.shape.workspaceId.safeParse(options.workspace);
-  if (!workspaceId.success) throw new Error("Set --workspace to the destination workspace UUID.");
+  const workspaceId = sessionImportRequest.shape.workspaceId.safeParse(options.workspace ?? await approvedWorkspaceDefault());
+  if (!workspaceId.success) throw new Error("Pass --workspace with the destination workspace ID, or sign in with tideline login.");
 
   const apiOrigin = tidelineApiOrigin();
   const { source } = options;

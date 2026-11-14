@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { workspaceResponse } from "@tideline/contracts";
 import { z } from "zod";
 
 const deviceGrant = "urn:ietf:params:oauth:grant-type:device_code";
@@ -156,12 +155,20 @@ export function tidelineApiOrigin() {
   return getOrigin(process.env.TIDELINE_API_URL ?? "http://127.0.0.1:3001", "TIDELINE_API_URL", true);
 }
 
-export async function approveInBrowser(browser: boolean) {
+async function clerkDeviceSettings() {
   const issuer = getOrigin(process.env.TIDELINE_CLERK_ISSUER, "TIDELINE_CLERK_ISSUER");
   const clientId = process.env.TIDELINE_CLERK_OAUTH_CLIENT_ID?.trim();
   if (!clientId) throw new Error("Set TIDELINE_CLERK_OAUTH_CLIENT_ID to the public OAuth client ID.");
 
-  const { deviceEndpoint, tokenEndpoint } = await discoverClerk(issuer);
+  return { ...await discoverClerk(issuer), clientId };
+}
+
+export async function checkClerkDevice() {
+  await clerkDeviceSettings();
+}
+
+export async function approveInBrowser(browser: boolean) {
+  const { deviceEndpoint, tokenEndpoint, clientId } = await clerkDeviceSettings();
   const response = await postOAuthForm(
     deviceEndpoint,
     new URLSearchParams({ client_id: clientId, scope: "openid" }),
@@ -184,36 +191,31 @@ export async function approveInBrowser(browser: boolean) {
   return pollForToken({ tokenEndpoint, clientId, device: device.data, expiresAt });
 }
 
-export function postToTideline({ apiOrigin, path, accessToken, body, signal }: {
+export function requestTideline({ apiOrigin, path, accessToken, body, signal, method }: {
   apiOrigin: string;
   path: string;
-  accessToken: string;
+  accessToken?: string;
+  method: "GET" | "POST" | "DELETE";
   body?: string;
   signal?: AbortSignal;
 }) {
-  const headers = new Headers({ Authorization: `Bearer ${accessToken}` });
+  const headers = new Headers();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   if (body !== undefined) headers.set("Content-Type", "application/json");
 
   const timeout = AbortSignal.timeout(requestTimeout);
-  return fetch(new URL(path, apiOrigin), {
-    method: "POST",
+  const url = new URL(path, apiOrigin);
+  if (url.origin !== apiOrigin) throw new Error("Tideline request must use the approved API origin.");
+  return fetch(url, {
+    method,
     headers,
     body,
     redirect: "manual",
+    cache: "no-store",
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   }).catch(() => null);
 }
 
-export async function login({ browser }: { browser: boolean }) {
-  const apiOrigin = tidelineApiOrigin();
-  const accessToken = await approveInBrowser(browser);
-  const approval = await postToTideline({ apiOrigin, path: "/v1/cli/approve", accessToken });
-
-  if (!approval?.ok) {
-    throw new Error("Clerk approved the request, but Tideline could not verify it. Check the API and its OAuth client configuration.");
-  }
-
-  const workspace = workspaceResponse.safeParse(await readJson(approval));
-  if (!workspace.success) throw new Error("Tideline returned an invalid workspace response.");
-  process.stdout.write(`Browser approval verified for ${workspace.data.name} (${workspace.data.id}).\n`);
+export function postToTideline(options: Omit<Parameters<typeof requestTideline>[0], "method">) {
+  return requestTideline({ ...options, method: "POST" });
 }

@@ -1,6 +1,6 @@
 import { sessionSource as sessionSourceContract } from "@tideline/contracts";
 import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, UsageGoal } from "@tideline/contracts";
-import { integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -33,11 +33,19 @@ export const agentSessions = pgTable("codex_sessions", {
   readyReview: jsonb("ready_review").$type<SessionReview>(),
 }, (table) => [
   unique("agent_sessions_workspace_source_unique").on(table.workspaceId, table.source, table.sourceSessionId),
+  index("agent_sessions_workspace_receipt_index").on(table.workspaceId, table.receivedAt.desc(), table.id.desc()),
 ]);
 
 export const syncGrants = pgTable("sync_grants", {
   tokenHash: text("token_hash").primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
+export const cliGrants = pgTable("cli_grants", {
+  tokenHash: text("token_hash").primaryKey(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });

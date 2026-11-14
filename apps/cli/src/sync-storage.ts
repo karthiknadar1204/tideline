@@ -35,7 +35,7 @@ const sharedConfig = z.strictObject({
 });
 
 const configSchema = z.union([
-  sharedConfig.extend({ projects: z.array(approvedProjectSchema).min(1) }),
+  sharedConfig.extend({ projects: z.array(approvedProjectSchema) }),
   sharedConfig.extend({ projectDirectory: z.string().min(1) }).transform(({ projectDirectory, ...config }) => ({
     ...config,
     projects: [{ directory: projectDirectory, since: config.startedAt }],
@@ -72,7 +72,7 @@ async function checkPrivatePath(path: string, type: "directory" | "file") {
   }
 }
 
-async function openDatabase(directory: string, name: string, create: boolean) {
+export async function openPrivateDatabase(directory: string, name: string, create: boolean) {
   const file = join(directory, name);
   if (create) {
     try {
@@ -90,7 +90,7 @@ async function openDatabase(directory: string, name: string, create: boolean) {
   return new DatabaseSync(file);
 }
 
-export async function openSyncStorage({ lock = false, create = false } = {}) {
+export async function ensureSyncDirectory(create: boolean) {
   const directory = resolve(process.env.TIDELINE_SYNC_HOME ?? join(homedir(), ".tideline"));
   if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
   try {
@@ -99,8 +99,13 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     if (hasErrorCode(error, "ENOENT")) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
     throw error;
   }
+  return directory;
+}
 
-  const writer = lock ? await openDatabase(directory, "sync-lock.sqlite", true) : undefined;
+export async function openSyncStorage({ lock = false, create = false } = {}) {
+  const directory = await ensureSyncDirectory(create);
+
+  const writer = lock ? await openPrivateDatabase(directory, "sync-lock.sqlite", true) : undefined;
   try {
     writer?.exec("BEGIN IMMEDIATE");
   } catch (error) {
@@ -111,7 +116,7 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
 
   let db: DatabaseSync;
   try {
-    db = await openDatabase(directory, "sync.sqlite", create);
+    db = await openPrivateDatabase(directory, "sync.sqlite", create);
   } catch (error) {
     writer?.close();
     if (hasErrorCode(error, "ENOENT")) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
@@ -128,6 +133,11 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         phase TEXT NOT NULL CHECK (phase IN ('starting', 'running', 'stopping', 'stopped', 'failed')),
         started_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS retry_request (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        id TEXT NOT NULL,
+        account TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS uploads (
         session_key TEXT PRIMARY KEY,
         fingerprint TEXT NOT NULL,
@@ -143,6 +153,12 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     }
     if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'project_directory'").get()) {
       db.exec("ALTER TABLE uploads ADD COLUMN project_directory TEXT");
+    }
+    if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'http_status'").get()) {
+      db.exec("ALTER TABLE uploads ADD COLUMN http_status INTEGER");
+    }
+    if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'retry_id'").get()) {
+      db.exec("ALTER TABLE uploads ADD COLUMN retry_id TEXT");
     }
   } catch (error) {
     db.close();
@@ -187,7 +203,7 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       return true;
     },
     async collectorLockHeld() {
-      const probe = await openDatabase(directory, "sync-lock.sqlite", false).catch((error) => {
+      const probe = await openPrivateDatabase(directory, "sync-lock.sqlite", false).catch((error) => {
         if (!hasErrorCode(error, "ENOENT")) throw error;
       });
       if (!probe) return false;
@@ -212,8 +228,8 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       db.exec("BEGIN IMMEDIATE");
       try {
         if (removed.length) {
-          db.exec("DELETE FROM uploads WHERE phase = 'queued' AND project_directory IS NULL");
-          const remove = db.prepare("DELETE FROM uploads WHERE phase = 'queued' AND project_directory = ?");
+          db.exec("DELETE FROM uploads WHERE phase <> 'received' AND project_directory IS NULL");
+          const remove = db.prepare("DELETE FROM uploads WHERE phase <> 'received' AND project_directory = ?");
           for (const { directory } of removed) remove.run(directory);
         }
         db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify(config));
@@ -223,14 +239,37 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         throw error;
       }
     },
+    requestRetry(account: string, id: string) {
+      const result = db.prepare(`
+        INSERT INTO retry_request (singleton, id, account)
+        SELECT 1, ?, ? FROM config WHERE id = 1 AND json_extract(value, '$.account') = ?
+          AND coalesce(json_extract(value, '$.revoked'), 0) = 0
+        ON CONFLICT (singleton) DO UPDATE SET id = excluded.id, account = excluded.account
+        WHERE retry_request.account <> excluded.account
+      `).run(id, account, account);
+      return Number(result.changes) > 0 || Boolean(db.prepare("SELECT 1 FROM retry_request WHERE account = ?").get(account));
+    },
+    requestedRetry(account: string) {
+      const row = db.prepare("SELECT id FROM retry_request WHERE account = ?").get(account);
+      return typeof row?.id === "string" ? row.id : undefined;
+    },
+    finishRetry(id: string) {
+      db.prepare("DELETE FROM retry_request WHERE id = ?").run(id);
+    },
+    retryCandidates(id: string) {
+      const rows = db.prepare("SELECT session_key FROM uploads WHERE phase = 'failed' AND retry_id IS NOT ?").all(id);
+      return new Set(rows.map((row) => String(row.session_key)));
+    },
     queue(upload: {
       sessionKey: string; fingerprint: string; messageCount: number; tailLine: number; body: string; projection: 1 | 2; projectDirectory: string;
-    }) {
+    }, retryId?: string) {
       const existing = db.prepare(
-        "SELECT fingerprint, message_count, tail_line, projection FROM uploads WHERE session_key = ?",
+        "SELECT fingerprint, message_count, tail_line, projection, phase, retry_id, project_directory FROM uploads WHERE session_key = ?",
       ).get(upload.sessionKey);
+      if (retryId && (existing?.phase !== "failed" || existing.retry_id === retryId ||
+        (existing.project_directory && existing.project_directory !== upload.projectDirectory))) return "unchanged";
       if (existing && (
-        existing.fingerprint === upload.fingerprint ||
+        (!retryId && existing.fingerprint === upload.fingerprint) ||
         upload.tailLine < Number(existing.tail_line) ||
         (upload.projection <= Number(existing.projection) && upload.messageCount < Number(existing.message_count))
       )) return "unchanged";
@@ -241,13 +280,14 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       if (Number(queued?.bytes ?? 0) + Buffer.byteLength(upload.body) > maximumQueueBytes) return "full";
 
       db.prepare(`
-        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at, projection, project_directory)
-        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+        INSERT INTO uploads (session_key, fingerprint, message_count, tail_line, phase, body, queued_at, projection, project_directory, retry_id)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
         ON CONFLICT (session_key) DO UPDATE SET
           fingerprint = excluded.fingerprint, message_count = excluded.message_count,
           tail_line = excluded.tail_line, phase = 'queued', body = excluded.body, queued_at = excluded.queued_at,
-          projection = excluded.projection, project_directory = excluded.project_directory
-      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now(), upload.projection, upload.projectDirectory);
+          projection = excluded.projection, project_directory = excluded.project_directory,
+          retry_id = excluded.retry_id, http_status = NULL
+      `).run(upload.sessionKey, upload.fingerprint, upload.messageCount, upload.tailLine, upload.body, Date.now(), upload.projection, upload.projectDirectory, retryId ?? null);
       return "queued";
     },
     pending() {
@@ -256,18 +296,27 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         ORDER BY queued_at, session_key LIMIT 10
       `).all().map((row) => ({ sessionKey: String(row.session_key), body: String(row.body) }));
     },
-    finish(sessionKey: string, phase: "received" | "failed") {
-      db.prepare("UPDATE uploads SET phase = ?, body = NULL WHERE session_key = ?").run(phase, sessionKey);
+    finish(sessionKey: string, result: { phase: "received" } | { phase: "failed"; httpStatus: number }, retryId?: string) {
+      db.prepare("UPDATE uploads SET phase = ?, body = NULL, http_status = ?, retry_id = coalesce(?, retry_id) WHERE session_key = ?")
+        .run(result.phase, result.phase === "failed" ? result.httpStatus : null, retryId ?? null, sessionKey);
     },
     counts() {
       const rows = db.prepare("SELECT phase, count(*) AS count FROM uploads GROUP BY phase").all();
       return new Map(rows.map((row) => [String(row.phase), Number(row.count)]));
     },
+    failureCounts() {
+      const migrated = db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'http_status'").get();
+      const status = migrated ? "http_status" : "NULL";
+      const rows = db.prepare(`
+        SELECT ${status} AS status, count(*) AS count FROM uploads WHERE phase = 'failed' GROUP BY status ORDER BY status
+      `).all();
+      return rows.map((row) => ({ httpStatus: typeof row.status === "number" ? row.status : null, count: Number(row.count) }));
+    },
     markRevoked(config: SyncConfig) {
       db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify({ ...config, revoked: true }));
     },
     clear() {
-      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; DELETE FROM background; COMMIT;");
+      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; DELETE FROM background; DELETE FROM retry_request; COMMIT;");
     },
     close() {
       db.close();

@@ -2,6 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { createClerkClient } from "@clerk/backend";
 import { parsePublishableKey } from "@clerk/shared/keys";
 import {
+  cliLoginResponse,
+  cliSessionListQuery,
   MAX_CODEX_IMPORT_BYTES,
   sessionImportRequest,
   syncEnrollmentRequest,
@@ -9,7 +11,7 @@ import {
   workspaceResponse,
   workspaceUsageTargetUpdate,
 } from "@tideline/contracts";
-import type { WorkspaceResponse } from "@tideline/contracts";
+import type { CliAccount, WorkspaceResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
 import { createSessionStore } from "@tideline/db/sessions";
 import { Hono } from "hono";
@@ -17,20 +19,25 @@ import { bodyLimit } from "hono/body-limit";
 import { createMiddleware } from "hono/factory";
 import { priceSession } from "./pricing";
 
-type WorkspaceContext = { Variables: { ownerId: string } };
-const syncLifetimeMs = 30 * 24 * 60 * 60 * 1_000;
+type WorkspaceContext = { Variables: { ownerId: string; cliAccount: CliAccount } };
+const grantLifetimeMs = 30 * 24 * 60 * 60 * 1_000;
 const importBodyLimit = bodyLimit({
   maxSize: MAX_CODEX_IMPORT_BYTES,
   onError: (context) => context.json({ error: "Session import exceeds the size limit." }, 413),
 });
 
-function hashSyncToken(token: string) {
+function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
 function parseSyncAuthorization(authorization: string | undefined) {
   const token = /^Bearer (tdsync_[0-9a-f]{64})$/.exec(authorization ?? "")?.[1];
-  return token && hashSyncToken(token);
+  return token && hashToken(token);
+}
+
+function parseCliAuthorization(authorization: string | undefined) {
+  const credential = cliLoginResponse.shape.token.safeParse(/^Bearer (\S+)$/.exec(authorization ?? "")?.[1]);
+  return credential.success ? hashToken(credential.data) : undefined;
 }
 
 function getWorkspaceServices() {
@@ -197,6 +204,67 @@ export function createWorkspaceRoutes() {
     return context.json(workspace satisfies WorkspaceResponse);
   });
 
+  const requireCliAccount = createMiddleware<WorkspaceContext>(async (context, next) => {
+    const tokenHash = parseCliAuthorization(context.req.header("Authorization"));
+    const account = tokenHash && await workspaces.findCliAccount(tokenHash);
+    if (!account) return context.json({ error: "A valid CLI sign-in is required." }, 401);
+    context.set("cliAccount", account);
+    await next();
+  });
+
+  routes.post("/cli/account", requireClerkCli, async (context) => {
+    const userId = context.get("ownerId");
+    const workspace = await workspaces.ensurePersonal(userId);
+    const token = `tdcli_${randomBytes(32).toString("hex")}`;
+    const expiresAt = new Date(Date.now() + grantLifetimeMs);
+    await workspaces.enrollCli(hashToken(token), workspace.id, expiresAt);
+    return context.json(cliLoginResponse.parse({ token, expiresAt: expiresAt.toISOString(), account: { userId, workspace } }), 201);
+  });
+
+  routes.get("/cli/account", requireCliAccount, (context) => context.json(context.get("cliAccount")));
+
+  routes.delete("/cli/account", async (context) => {
+    const tokenHash = parseCliAuthorization(context.req.header("Authorization"));
+    if (!tokenHash || !await workspaces.revokeCli(tokenHash)) {
+      return context.json({ error: "A valid CLI sign-in is required." }, 401);
+    }
+    return context.body(null, 204);
+  });
+
+  routes.get("/cli/workspaces/:workspaceId", requireCliAccount, async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    const workspace = workspaceId.success && await workspaces.findOwned({
+      workspaceId: workspaceId.data, ownerId: context.get("cliAccount").userId,
+    });
+    return workspace ? context.json(workspace) : context.json({ error: "Workspace not found." }, 404);
+  });
+
+  routes.get("/cli/workspaces/:workspaceId/sessions", requireCliAccount, async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    if (!workspaceId.success || !await workspaces.findOwned({
+      workspaceId: workspaceId.data, ownerId: context.get("cliAccount").userId,
+    })) {
+      return context.json({ error: "Workspace not found." }, 404);
+    }
+    const query = cliSessionListQuery.safeParse(context.req.query());
+    if (!query.success) return context.json({ error: "Invalid session filters or page cursor." }, 400);
+
+    const { sessions: rows, nextCursor } = await sessions.pageReady(workspaceId.data, query.data);
+    return context.json({ sessions: rows.map(priceSession), nextCursor });
+  });
+
+  routes.get("/cli/workspaces/:workspaceId/sessions/:sessionId", requireCliAccount, async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    const sessionId = workspaceResponse.shape.id.safeParse(context.req.param("sessionId"));
+    if (!workspaceId.success || !sessionId.success || !await workspaces.findOwned({
+      workspaceId: workspaceId.data, ownerId: context.get("cliAccount").userId,
+    })) {
+      return context.json({ error: "Session not found." }, 404);
+    }
+    const session = await sessions.findReady(workspaceId.data, sessionId.data);
+    return session ? context.json(priceSession(session)) : context.json({ error: "Session not found." }, 404);
+  });
+
   routes.post(
     "/cli/imports",
     requireClerkCli,
@@ -238,9 +306,9 @@ export function createWorkspaceRoutes() {
     }
 
     const token = `tdsync_${randomBytes(32).toString("hex")}`;
-    const expiresAt = new Date(Date.now() + syncLifetimeMs);
+    const expiresAt = new Date(Date.now() + grantLifetimeMs);
     const response = syncEnrollmentResponse.parse({ token, expiresAt: expiresAt.toISOString() });
-    await sessions.enrollSync({ tokenHash: hashSyncToken(token), workspaceId: workspace.id, expiresAt });
+    await sessions.enrollSync({ tokenHash: hashToken(token), workspaceId: workspace.id, expiresAt });
     return context.json(response, 201);
   });
 
@@ -250,6 +318,13 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "A sync credential is required." }, 401);
     }
     return context.body(null, 204);
+  });
+
+  routes.get("/cli/sync/status", async (context) => {
+    const tokenHash = parseSyncAuthorization(context.req.header("Authorization"));
+    const grant = tokenHash && await sessions.readSyncGrant(tokenHash);
+    if (!grant) return context.json({ error: "The sync credential is invalid, expired, or revoked." }, 401);
+    return context.json(syncEnrollmentRequest.parse(grant));
   });
 
   routes.post("/cli/sync/sessions", importBodyLimit, async (context) => {

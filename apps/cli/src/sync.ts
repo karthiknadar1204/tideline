@@ -16,15 +16,17 @@ import { findSessionCommits } from "./commit-links";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
 import { readRepository } from "./repository";
 import { redactConversationText } from "./session-safety";
-import type { LiveSession } from "./session-jsonl";
+import type { LiveSession, SessionCandidate } from "./session-jsonl";
 import { openCollectorStorage, readBackgroundStatus, startBackgroundSync, stopBackgroundSync } from "./sync-background";
 import { chooseProjects, createApprovedScope, explicitProjects, historyStart, sameCheckout, terminalText } from "./sync-projects";
 import { configuredAgentRoots, databaseSources, databaseVersion, fileSources, isInaccessible, isWithin, readPhysicalDirectory, sessionFiles } from "./sync-sources";
 import {
+  backgroundStartupTimeout,
   deleteSyncCredential,
   loadSyncCredential,
   openSyncStorage,
   storeSyncCredential,
+  SyncLockError,
   SyncSetupMissingError,
 } from "./sync-storage";
 import type { SyncConfig } from "./sync-storage";
@@ -90,6 +92,10 @@ export async function setupSync(options: SetupOptions) {
   if (process.platform === "win32") throw new Error("Tideline automatic sync currently requires macOS or Linux.");
   const previous = await readCurrentSetup();
   const apiOrigin = tidelineApiOrigin();
+  if (!options.workspace && !previous) {
+    const { approvedWorkspaceDefault } = await import("./cli-account");
+    options = { ...options, workspace: await approvedWorkspaceDefault() };
+  }
   if (previous && (previous.apiOrigin !== apiOrigin || (options.workspace && options.workspace !== previous.workspaceId) ||
       previous.revoked || Date.now() >= Date.parse(previous.expiresAt))) {
     throw new Error("Revoke this collector before changing its workspace or renewing its approval.");
@@ -107,7 +113,7 @@ export async function setupSync(options: SetupOptions) {
   }
   const selection = options.project?.length ? {
     projects: await explicitProjects(options.project), history: options.history ?? false, background: options.background ?? false,
-  } : await chooseProjects(roots, previous?.projects ?? [], options);
+  } : await chooseProjects(roots, previous?.projects ?? [], { ...options, allowEmpty: Boolean(previous) });
   if (!selection) {
     console.info("Setup canceled.");
     return;
@@ -139,7 +145,9 @@ export async function setupSync(options: SetupOptions) {
   } finally {
     storage.close();
   }
-  if (selection.background) {
+  if (!selection.projects.length) {
+    console.info("Uploads are paused. Run tideline enable to choose repositories again.");
+  } else if (selection.background) {
     await startBackgroundSync();
   } else {
     console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
@@ -159,6 +167,11 @@ type Storage = Awaited<ReturnType<typeof openSyncStorage>>;
 type SourceReader = ReturnType<typeof fileSources>[number]["read"];
 type ObservedFile = { version: string; retryAt?: number };
 type ObservedDatabase = { version: string; reconcileAt: number };
+type UploadRetry = { id: string; candidates: Set<string> };
+
+function sessionKey({ source, sourceSessionId }: Pick<SessionCandidate, "source" | "sourceSessionId">) {
+  return `${source}:${sourceSessionId}`;
+}
 
 async function collectNewSessions(
   config: SyncConfig,
@@ -166,8 +179,15 @@ async function collectNewSessions(
   observed: Map<string, ObservedFile>,
   databases: Map<string, ObservedDatabase>,
   signal: AbortSignal,
+  retry?: UploadRetry,
 ) {
   const scope = createApprovedScope(config.projects);
+  const options = {
+    live: true as const,
+    ...scope,
+    sessionAllowed: (candidate: SessionCandidate) => scope.sessionAllowed(candidate) &&
+      (!retry || retry.candidates.has(sessionKey(candidate))),
+  };
   const nextObserved = new Map<string, ObservedFile>();
   const repositories = new Map<string, Awaited<ReturnType<typeof readRepository>>>();
   let inaccessible = false;
@@ -175,7 +195,7 @@ async function collectNewSessions(
   async function queueSession(result: LiveSession) {
     const { source, analytics } = result.session;
     const project = await scope.projectScope(result.projectDirectory);
-    if (!project || signal.aborted || !scope.sessionAllowed({ startedAt: result.session.startedAt, projectDirectory: project })) return;
+    if (!project || signal.aborted || !options.sessionAllowed({ ...result.session, projectDirectory: project })) return;
     const projectDirectory = scope.projectRoot(project);
     if (!projectDirectory) return;
     if (!repositories.has(project)) repositories.set(project, await readRepository(project));
@@ -211,14 +231,14 @@ async function collectNewSessions(
     }
 
     const phase = storage.queue({
-      sessionKey: `${source}:${session.sourceSessionId}`,
+      sessionKey: sessionKey(session),
       projectDirectory,
       fingerprint: createHash("sha256").update(body).digest("hex"),
       messageCount: session.events.length,
       tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0, session.review?.throughLine ?? 0),
       projection: session.activity ? 2 : 1,
       body,
-    });
+    }, retry?.id);
     return phase === "full" ? "full" : undefined;
   }
 
@@ -238,8 +258,7 @@ async function collectNewSessions(
     let retryProject = false;
     try {
       result = await read(physicalPath, {
-        live: true,
-        ...scope,
+        ...options,
         async projectScope(directory) {
           const project = await scope.projectScope(directory);
           if (!project && directory && scope.projectRoot(directory)) retryProject = true;
@@ -298,7 +317,7 @@ async function collectNewSessions(
       const version = await databaseVersion(await files(root));
       const previous = databases.get(source);
       if (previous?.version === version && previous.reconcileAt > Date.now()) continue;
-      for await (const result of read(root, { live: true, ...scope })) {
+      for await (const result of read(root, options)) {
         if (signal.aborted) break;
         if (await queueSession(result) === "full") {
           full = true;
@@ -317,23 +336,95 @@ async function collectNewSessions(
   return { observed: nextObserved, full, inaccessible };
 }
 
-async function sendPending(storage: Storage, config: SyncConfig, token: string, signal: AbortSignal) {
-  for (const { sessionKey, body } of storage.pending()) {
+async function sendPending(storage: Storage, config: SyncConfig, token: string, signal: AbortSignal,
+  pending = storage.pending(), retryId?: string) {
+  for (const { sessionKey, body } of pending) {
     if (signal.aborted) return true;
     const response = await postToTideline({ apiOrigin: config.apiOrigin, path: syncRoutes.sessions, body, accessToken: token, signal });
     if (response?.status === 401 || response?.status === 403) {
       throw new Error("Tideline sync authorization expired or was revoked. Run tideline sync revoke and set it up again.");
     }
     if (response && [400, 404, 409, 413].includes(response.status)) {
-      storage.finish(sessionKey, "failed");
+      storage.finish(sessionKey, { phase: "failed", httpStatus: response.status }, retryId);
       console.warn(`A session could not be uploaded (HTTP ${response.status}). Run tideline sync status for local counts.`);
       continue;
     }
     if (!response?.ok || !codexImportResponse.safeParse(await readJson(response)).success) return false;
-    storage.finish(sessionKey, "received");
+    storage.finish(sessionKey, { phase: "received" });
     console.info("A session update was received by Tideline.");
   }
   return true;
+}
+
+async function loadActiveSyncToken(storage: Storage, config: SyncConfig) {
+  if (config.revoked || Date.now() >= Date.parse(config.expiresAt)) {
+    throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
+  }
+  return loadSyncCredential(storage.directory, config);
+}
+
+async function attemptRetry(storage: Storage, config: SyncConfig, token: string, id: string, signal: AbortSignal) {
+  let observed = new Map<string, ObservedFile>();
+  const databases = new Map<string, ObservedDatabase>();
+  let scanned = false;
+  while (!signal.aborted) {
+    const pending = storage.pending();
+    if (pending.length) {
+      if (!await sendPending(storage, config, token, signal, pending, id)) return signal.aborted ? "interrupted" : "offline";
+      continue;
+    }
+    if (scanned || !config.projects.length) break;
+    const candidates = storage.retryCandidates(id);
+    if (!candidates.size) break;
+    const scan = await collectNewSessions(config, storage, observed, databases, signal, { id, candidates });
+    observed = scan.observed;
+    scanned = !scan.full;
+  }
+  if (signal.aborted) return "interrupted";
+  storage.finishRetry(id);
+  return "finished";
+}
+
+export async function retrySync() {
+  const control = await openSyncStorage();
+  try {
+    const config = requireSetup(control);
+    const token = await loadActiveSyncToken(control, config);
+    if (!control.requestRetry(config.account, randomUUID())) throw new Error("Sync setup changed. Run tideline sync retry again.");
+    const writer = await openSyncStorage({ lock: true }).catch((error) => {
+      if (!(error instanceof SyncLockError)) throw error;
+    });
+    if (!writer) {
+      console.info("Retry requested. It will run while sync is active. If sync stops, run tideline sync retry again.");
+      return;
+    }
+    try {
+      const current = requireSetup(writer);
+      if (current.account !== config.account) throw new Error("Sync setup changed. Run tideline sync retry again.");
+      const id = writer.requestedRetry(current.account);
+      if (id) {
+        const background = writer.background();
+        if (background?.phase === "starting" && Date.now() - background.startedAt < backgroundStartupTimeout) {
+          console.info("Retry requested. Background sync will retry failed uploads and drain the queue.");
+          return;
+        }
+        const outcome = await attemptRetry(writer, current, token, id, AbortSignal.timeout(30_000));
+        if (outcome === "offline") throw new Error("Tideline is unavailable. Uploads remain queued for the next sync or retry.");
+        if (outcome === "interrupted") throw new Error("Retry paused after 30 seconds. Run tideline sync retry again or start sync to continue.");
+      }
+      const counts = writer.counts();
+      const failed = counts.get("failed") ?? 0;
+      console.info(`Retry complete. Received: ${counts.get("received") ?? 0}. Still failed: ${failed}.`);
+      if (failed) {
+        console.info("Run tideline sync status for failure details. Retry can recover only sessions still available in approved projects.");
+        process.exitCode = 1;
+      }
+    } finally {
+      writer.close();
+    }
+  } finally {
+    control.close();
+  }
 }
 
 export async function runSync({ backgroundId }: { backgroundId?: string } = {}) {
@@ -347,10 +438,8 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
   try {
     if (!backgroundId && !storage.prepareForeground()) throw new Error("Background sync is starting. Check tideline sync status.");
     const config = requireSetup(storage);
-    if (config.revoked || Date.now() >= Date.parse(config.expiresAt)) {
-      throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
-    }
-    const token = await loadSyncCredential(storage.directory, config);
+    if (!config.projects.length) throw new Error("Choose repositories with tideline enable before starting sync.");
+    const token = await loadActiveSyncToken(storage, config);
     if (backgroundId) {
       if (!storage.activateBackground(backgroundId)) return;
       monitor = setInterval(() => {
@@ -365,6 +454,7 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
     const databases = new Map<string, ObservedDatabase>();
     let nextRetryAt = 0;
     let retryDelay = 2_000;
+    let observedRetry: string | undefined;
     let offline = false;
     let queueFull = false;
     let inaccessible = false;
@@ -392,8 +482,14 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
       if (scan.inaccessible && !inaccessible) console.warn("Some agent session files or folders are inaccessible. Sync will retry them.");
       inaccessible = scan.inaccessible;
 
+      const requested = storage.requestedRetry(config.account);
+      if (requested && requested !== observedRetry) nextRetryAt = 0;
+      observedRetry = requested;
       if (Date.now() >= nextRetryAt) {
-        if (await sendPending(storage, config, token, stopping.signal)) {
+        const reachable = requested
+          ? await attemptRetry(storage, config, token, requested, stopping.signal) !== "offline"
+          : await sendPending(storage, config, token, stopping.signal);
+        if (reachable) {
           if (offline) console.info("Tideline is reachable. Resuming uploads.");
           offline = false;
           retryDelay = 2_000;
@@ -432,6 +528,9 @@ export async function syncStatus() {
     }
     console.info(config.revoked ? "Approval revoked." : `Approval expires: ${config.expiresAt}`);
     console.info(`Queued: ${counts.get("queued") ?? 0}. Received: ${counts.get("received") ?? 0}. Failed: ${counts.get("failed") ?? 0}.`);
+    for (const { httpStatus, count } of storage.failureCounts()) {
+      console.info(`${httpStatus === null ? "Unknown failure" : `HTTP ${httpStatus}`}: ${count}`);
+    }
   } finally {
     storage.close();
   }

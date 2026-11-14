@@ -57,6 +57,13 @@
       "when": 1794659934321,
       "tag": "0007_cursor_opencode_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794666091290,
+      "tag": "0008_cli_account_access",
+      "breakpoints": true
     }
   ]
 }
