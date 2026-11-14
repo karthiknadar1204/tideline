@@ -1,0 +1,20 @@
+{
+  "name": "@tideline/cli",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tideline": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --target=node --outfile=dist/index.js",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tideline/contracts": "workspace:*",
+    "commander": "15.1.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5"
+  }
+}

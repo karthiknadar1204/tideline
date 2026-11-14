@@ -1,0 +1,7 @@
+{"timestamp":"2026-11-14T09:00:00.000Z","type":"session_meta","payload":{"id":"019a82c9-9a00-7584-9e60-a41beb24bbd3","cwd":"/synthetic-omitted-path/example","source":"cli"}}
+{"timestamp":"2026-11-14T09:00:01.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"SYNTHETIC_INSTRUCTIONS_MUST_NOT_UPLOAD"}]}}
+{"timestamp":"2026-11-14T09:00:01.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\nSYNTHETIC_ENVIRONMENT_CONTEXT_MUST_NOT_UPLOAD\n</environment_context>"}]}}
+{"timestamp":"2026-11-14T09:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Add a test for empty input\n\nThe sample parser should return an empty list when given an empty string."}]}}
+{"timestamp":"2026-11-14T09:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"SYNTHETIC_DUPLICATE_EVENT_MUST_NOT_UPLOAD"}}
+{"timestamp":"2026-11-14T09:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"synthetic-call","arguments":"{\"command\":\"SYNTHETIC_TOOL_ARGUMENTS_MUST_NOT_UPLOAD\"}"}}
+{"timestamp":"2026-11-14T09:00:05.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The parser test now checks that an empty string returns an empty list."}]}}
