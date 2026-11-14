@@ -39,6 +39,41 @@ export type WorkspaceAccess = z.infer<typeof workspaceAccess>;
 export type WorkspaceRole = z.infer<typeof workspaceRole>;
 export type TeamMemberRole = z.infer<typeof teamMemberRole>;
 
+export const savedReportVisibility = z.enum(["private", "workspace"]);
+const reportTitle = z.string().trim().min(1).max(120).refine((title) => !/\p{Cc}/u.test(title));
+const reportMarkdown = z.string().trim().min(1).max(20_000).refine((markdown) => !markdown.includes("\0"));
+const reportSessionIds = z.array(z.uuid().toLowerCase()).max(25)
+  .refine((ids) => new Set(ids).size === ids.length, { message: "Session references must be unique." });
+
+export const saveReportRequest = z.strictObject({
+  title: reportTitle,
+  markdown: reportMarkdown,
+  visibility: savedReportVisibility.default("private"),
+  sessionIds: reportSessionIds.default([]),
+});
+
+export const SAVED_REPORT_PAGE_SIZE = 20;
+export const savedReportPage = z.string().regex(/^[1-9][0-9]*$/).default("1").transform(Number)
+  .pipe(z.int().min(1).max(Math.floor(Number.MAX_SAFE_INTEGER / SAVED_REPORT_PAGE_SIZE)));
+export const savedReportSummary = z.strictObject({
+  id: z.uuid(),
+  title: reportTitle,
+  visibility: savedReportVisibility,
+  createdAt: z.iso.datetime(),
+  sessionIds: reportSessionIds,
+  isAuthor: z.boolean(),
+});
+export const savedReportDetail = savedReportSummary.extend({ markdown: reportMarkdown });
+export const savedReportList = z.strictObject({
+  reports: z.array(savedReportSummary).max(SAVED_REPORT_PAGE_SIZE),
+  nextPage: z.int().positive().nullable(),
+});
+
+export type SaveReportRequest = z.infer<typeof saveReportRequest>;
+export type SavedReportSummary = z.infer<typeof savedReportSummary>;
+export type SavedReportDetail = z.infer<typeof savedReportDetail>;
+export type SavedReportList = z.infer<typeof savedReportList>;
+
 export const MAX_CODEX_IMPORT_BYTES = 1_048_576;
 export const MAX_CODEX_IMPORT_EVENTS = 500;
 

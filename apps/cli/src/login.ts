@@ -155,6 +155,10 @@ export function tidelineApiOrigin() {
   return getOrigin(process.env.TIDELINE_API_URL ?? "http://127.0.0.1:3001", "TIDELINE_API_URL", true);
 }
 
+export function tidelineWebOrigin() {
+  return getOrigin(process.env.TIDELINE_WEB_URL ?? "http://localhost:3000", "TIDELINE_WEB_URL", true);
+}
+
 async function clerkDeviceSettings() {
   const issuer = getOrigin(process.env.TIDELINE_CLERK_ISSUER, "TIDELINE_CLERK_ISSUER");
   const clientId = process.env.TIDELINE_CLERK_OAUTH_CLIENT_ID?.trim();

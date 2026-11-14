@@ -84,7 +84,10 @@ export default async function ReportsPage({ params, searchParams }: PageProps<"/
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Reports</h1>
           <p className="mt-2 text-sm text-[var(--workspace-muted)]">{interval} · UTC</p>
         </div>
-        <a className={action} href={`${base}/export?${reportFilterParams(filters)}`}>Download CSV</a>
+        <div className="flex flex-wrap gap-2">
+          <Link className={action} href={`${base}/saved`}>Saved reports</Link>
+          <a className={action} href={`${base}/export?${reportFilterParams(filters)}`}>Download CSV</a>
+        </div>
       </header>
       <form
         action={base}

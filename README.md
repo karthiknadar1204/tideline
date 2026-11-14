@@ -111,6 +111,23 @@ Open **Settings** to rename the workspace or copy the CLI sync command. Set a mo
 
 Periods use UTC. Weeks start on Monday. Tideline assigns a session's usage to the period in which the session started. The dashboard updates as sessions sync. If usage data is incomplete, Tideline shows the known amount and marks outcomes it cannot establish as partial or unavailable. Budgets and goals are advisory.
 
+## Connect an agent with MCP
+
+Build the CLI and sign in. In the intended workspace, open **Settings** and copy **Codex setup**. Run the copied command from the Tideline checkout, then start a new Codex session. Other MCP clients can launch `node` with the arguments below over stdio. Use absolute paths so the command works from any project.
+
+```sh
+bun run --filter @tideline/cli build
+node --env-file=apps/cli/.env.local apps/cli/dist/index.js login
+```
+
+```text
+node --env-file=/path/to/tideline/apps/cli/.env.local /path/to/tideline/apps/cli/dist/index.js mcp --workspace WORKSPACE_ID
+```
+
+The agent can search synced sessions, read a conversation, and save a Markdown report with optional links to its source sessions. Ask it to save the report when you want a copy in **Reports** → **Saved reports**. Reports default to **Private**. Ask for **Workspace** visibility to share one with current team members. The author can delete it from the dashboard.
+
+Each MCP connection serves the workspace specified in its command. To revoke this CLI login, rerun the sign-in command with `logout` in place of `login`. Set `TIDELINE_WEB_URL` in the CLI environment if your dashboard runs at a different origin.
+
 ## Read session activity
 
 Open a session to see tool calls, reported skill use, and child agent runs. **Returned** means a tool produced a result. A child run can stay **Running** after its launch tool returns. Tideline uses the parent session log and shows the latest status it can confirm. Each session includes up to 250 entries per activity category. Workspace totals show activity from sessions that have synced it.

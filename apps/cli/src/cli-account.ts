@@ -61,8 +61,8 @@ function endpoint(config: SavedAccount) {
   return apiOrigin;
 }
 
-function requestAccount(config: SavedAccount, method: "GET" | "DELETE", path = accountPath) {
-  return requestTideline({ apiOrigin: endpoint(config), path, method, accessToken: config.token });
+function requestAccount(config: SavedAccount, method: "GET" | "DELETE" | "POST", path = accountPath, options?: { body?: string; signal?: AbortSignal }) {
+  return requestTideline({ apiOrigin: endpoint(config), path, method, accessToken: config.token, ...options });
 }
 
 async function deleteGrant(config: SavedAccount) {
@@ -116,8 +116,11 @@ export async function openCliAccount({ workspace }: { workspace?: string } = {})
   const stored = await activeAccount();
   return {
     workspaceId: workspaceIdFor(stored, workspace),
-    async get<T>(path: string, schema: z.ZodType<T>) {
-      return checkedResponse(await requestAccount(stored, "GET", path), schema);
+    async get<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal) {
+      return checkedResponse(await requestAccount(stored, "GET", path, { signal }), schema);
+    },
+    async post<T>(path: string, body: unknown, schema: z.ZodType<T>, signal?: AbortSignal) {
+      return checkedResponse(await requestAccount(stored, "POST", path, { body: JSON.stringify(body), signal }), schema);
     },
   };
 }

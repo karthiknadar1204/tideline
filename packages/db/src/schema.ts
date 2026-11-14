@@ -1,4 +1,4 @@
-import { sessionSource as sessionSourceContract } from "@tideline/contracts";
+import { savedReportVisibility as savedReportVisibilityContract, sessionSource as sessionSourceContract } from "@tideline/contracts";
 import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, SharedSessionSnapshot, UsageGoal } from "@tideline/contracts";
 import { sql } from "drizzle-orm";
 import { check, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
@@ -92,3 +92,20 @@ export const sessionShares = pgTable("session_shares", {
   token: text("token").notNull().unique(),
   snapshot: jsonb("snapshot").$type<SharedSessionSnapshot>().notNull(),
 });
+
+export const savedReportVisibility = pgEnum("saved_report_visibility", savedReportVisibilityContract.enum);
+
+export const savedReports = pgTable("saved_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull(),
+  title: text("title").notNull(),
+  markdown: text("markdown").notNull(),
+  visibility: savedReportVisibility("visibility").notNull(),
+  sessionIds: uuid("session_ids").array().notNull(),
+  contentHash: text("content_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  unique("saved_reports_content_unique").on(table.workspaceId, table.authorId, table.contentHash),
+  index("saved_reports_workspace_created_index").on(table.workspaceId, table.createdAt.desc(), table.id.desc()),
+]);

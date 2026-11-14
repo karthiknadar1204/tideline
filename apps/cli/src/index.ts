@@ -20,6 +20,13 @@ program.command("whoami").description("Show the signed-in account, workspace, an
 program.command("doctor").description("Check sign-in, API connectivity, agent storage, and sync")
   .option("--json", "Print JSON").action(doctor);
 
+program.command("mcp").description("Serve one workspace to an MCP client over stdio")
+  .requiredOption("--workspace <id>", "Workspace ID this connection can access")
+  .action(async ({ workspace }: { workspace: string }) => {
+    const { serveMcp } = await import("./mcp");
+    await serveMcp(workspace);
+  });
+
 const workspace = program.command("workspace").description("List and select your workspaces");
 workspace.command("list").description("List workspaces available to your account").option("--json", "Print JSON").action(listWorkspaces);
 workspace.command("show").description("Show the current workspace").option("--workspace <id>", "Workspace ID")

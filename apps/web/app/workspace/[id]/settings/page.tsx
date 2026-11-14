@@ -2,6 +2,7 @@ import { listWorkspaceSessions, readWorkspaceAccess, readWorkspaceUsageTargets }
 import { RefreshSessions } from "../refresh-sessions";
 import { SyncSetup } from "../sync-setup";
 import { UsageTargets } from "../usage-targets";
+import { McpSetup } from "./mcp-setup";
 import { WorkspaceNameForm } from "./workspace-name-form";
 
 export default async function WorkspaceSettingsPage({ params }: PageProps<"/workspace/[id]/settings">) {
@@ -31,6 +32,7 @@ export default async function WorkspaceSettingsPage({ params }: PageProps<"/work
         </div>
         <SyncSetup workspaceId={id} />
       </div>
+      <McpSetup workspaceId={id} />
       <UsageTargets workspaceId={id} targets={targets} sessions={sessions} canEdit={workspace.role !== "member"} />
     </main>
   );

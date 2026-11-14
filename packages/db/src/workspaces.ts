@@ -43,7 +43,7 @@ export function workspaceManagedBy(userId: string) {
   return sql`(${workspaces.ownerId} = ${userId} or ${memberRole(userId)} = 'admin')`;
 }
 
-async function lockWorkspace(
+export async function lockWorkspace(
   transaction: Transaction,
   { workspaceId, userId }: WorkspaceUser,
 ): Promise<(Omit<WorkspaceAccess, "role"> & { ownerId: string; role: WorkspaceRole | undefined }) | undefined> {

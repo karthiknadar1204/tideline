@@ -5,6 +5,7 @@
   "exports": {
     ".": "./src/workspaces.ts",
     "./migrate": "./src/migrate.ts",
+    "./reports": "./src/reports.ts",
     "./sessions": "./src/sessions.ts",
     "./shares": "./src/shares.ts"
   },

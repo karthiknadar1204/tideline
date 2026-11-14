@@ -15,12 +15,15 @@ import {
 } from "@tideline/contracts";
 import type { CliAccount, WorkspaceResponse, WorkspaceSessionSearchResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
+import { createSavedReportStore } from "@tideline/db/reports";
 import { createSessionShareStore } from "@tideline/db/shares";
 import { createSessionStore } from "@tideline/db/sessions";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createMiddleware } from "hono/factory";
 import { priceSession } from "./pricing";
+import { registerSavedReportRoutes } from "./saved-report-routes";
 import { registerSessionShareRoutes } from "./session-share-routes";
 import { registerTeamRoutes } from "./team-routes";
 
@@ -67,6 +70,7 @@ function getWorkspaceServices() {
     workspaces: createWorkspaceStore(databaseUrl),
     sessions: createSessionStore(databaseUrl),
     shares: createSessionShareStore(databaseUrl),
+    savedReports: createSavedReportStore(databaseUrl),
   };
 }
 
@@ -84,7 +88,7 @@ export function createWorkspaceRoutes() {
     return routes;
   }
 
-  const { clerk, sessionVerification, workspaces, sessions, shares } = services;
+  const { clerk, sessionVerification, workspaces, sessions, shares, savedReports } = services;
   const oauthClientId = process.env.TIDELINE_CLERK_OAUTH_CLIENT_ID;
 
   routes.use("/workspaces/*", async (context, next) => {
@@ -181,9 +185,9 @@ export function createWorkspaceRoutes() {
     return context.json(summaries.map(priceSession));
   });
 
-  routes.get("/workspaces/:workspaceId/session-search", async (context) => {
+  async function searchSessions(context: Context<WorkspaceContext>, userId: string) {
     const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
-    if (!workspaceId.success || !await workspaces.findAccessible({ workspaceId: workspaceId.data, userId: context.get("userId") })) {
+    if (!workspaceId.success || !await workspaces.findAccessible({ workspaceId: workspaceId.data, userId })) {
       return context.json({ error: "Workspace not found." }, 404);
     }
 
@@ -192,7 +196,9 @@ export function createWorkspaceRoutes() {
 
     const result = await sessions.searchReady(workspaceId.data, filters.data);
     return context.json({ ...result, sessions: result.sessions.map(priceSession) } satisfies WorkspaceSessionSearchResponse);
-  });
+  }
+
+  routes.get("/workspaces/:workspaceId/session-search", (context) => searchSessions(context, context.get("userId")));
 
   routes.get("/workspaces/:workspaceId/sessions/:sessionId", async (context) => {
     const uuid = workspaceResponse.shape.id;
@@ -248,6 +254,8 @@ export function createWorkspaceRoutes() {
     await next();
   });
 
+  registerSavedReportRoutes(routes, savedReports, requireCliAccount);
+
   routes.post("/cli/account", requireClerkCli, async (context) => {
     const userId = context.get("userId");
     const workspace = await workspaces.ensurePersonal(userId);
@@ -277,6 +285,10 @@ export function createWorkspaceRoutes() {
       workspaceId: workspaceId.data, userId: context.get("cliAccount").userId,
     });
     return workspace ? context.json(workspace) : context.json({ error: "Workspace not found." }, 404);
+  });
+
+  routes.get("/cli/workspaces/:workspaceId/session-search", requireCliAccount, (context) => {
+    return searchSessions(context, context.get("cliAccount").userId);
   });
 
   routes.get("/cli/workspaces/:workspaceId/sessions", requireCliAccount, async (context) => {

@@ -5,11 +5,12 @@ import { usePathname } from "next/navigation";
 
 export function WorkspaceNav({ workspaceId, showMembers }: { workspaceId: string; showMembers: boolean }) {
   const base = `/workspace/${workspaceId}`;
+  const reports = `${base}/reports`;
   const pathname = usePathname();
-  const current = pathname.startsWith(`${base}/sessions/`) ? base : pathname;
+  const current = pathname.startsWith(`${base}/sessions/`) ? base : pathname.startsWith(`${reports}/`) ? reports : pathname;
   const links = [
     { href: base, label: "Sessions" },
-    { href: `${base}/reports`, label: "Reports" },
+    { href: reports, label: "Reports" },
     ...(showMembers ? [{ href: `${base}/members`, label: "Members" }] : []),
     { href: `${base}/settings`, label: "Settings" },
   ];
