@@ -67,7 +67,7 @@ export async function readClaudeSubagents({ path, sessionId, links, ...scope }: 
           (record.userType && record.userType !== "external")) continue;
       const isTaskNotification = record.origin?.kind === "task-notification";
       await activity.observe({
-        line, role: record.message.role, content: record.message.content, metadata: record.toolUseResult,
+        line, timestamp: record.timestamp, role: record.message.role, content: record.message.content, metadata: record.toolUseResult,
         isTaskNotification, attributionSkill: undefined, uuid: undefined,
       });
       if (!captureMessages || record.toolUseResult !== undefined || record.sourceToolAssistantUUID !== undefined || isTaskNotification) continue;

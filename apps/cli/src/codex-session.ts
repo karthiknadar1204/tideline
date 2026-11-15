@@ -176,7 +176,8 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
     if (record.data.type === "event_msg") {
       const root = checkout ?? options?.projectDirectory ?? projectDirectory;
       activity.event(record.data.payload, line, session.sourceSessionId, projectDirectory,
-        root && currentProject ? { root, workingDirectory: currentProject } : undefined);
+        root && currentProject ? { root, workingDirectory: currentProject } : undefined,
+        rolloutTimestamp.safeParse(record.data.timestamp).data);
       const taskUpdate = taskEvent.safeParse(record.data.payload).data;
       if (taskUpdate?.type === "task_started") {
         task = { id: taskUpdate.turn_id, contextWindow: taskUpdate.model_context_window ?? null };
@@ -231,12 +232,12 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       continue;
     }
     if (record.data.type !== "response_item") continue;
-    activity.response(record.data.payload, line, currentProject === projectDirectory ? projectDirectory : undefined);
+    const timestamp = rolloutTimestamp.safeParse(record.data.timestamp);
+    activity.response(record.data.payload, line, currentProject === projectDirectory ? projectDirectory : undefined, timestamp.data);
 
     const message = messageRecord.safeParse(record.data.payload);
     if (!message.success) continue;
     const content = messageContent.safeParse(record.data.payload);
-    const timestamp = rolloutTimestamp.safeParse(record.data.timestamp);
     if (!content.success || !timestamp.success) throw new Error(`Invalid Codex message at line ${line}.`);
 
     const expectedType = message.data.role === "user" ? "input_text" : "output_text";

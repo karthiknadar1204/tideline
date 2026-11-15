@@ -4,6 +4,7 @@ import { z } from "zod";
 import { fileReplacement, hasSensitiveToolPath, unifiedHunks } from "./session-capture";
 import type { SessionCaptureBuilder } from "./session-capture";
 import type { createSessionSafety } from "./session-safety";
+import { toolTiming } from "./session-turns";
 
 type ToolCall = SessionActivity["tools"][number];
 type SkillUse = SessionActivity["skills"][number];
@@ -143,6 +144,7 @@ function agentStatus(value: unknown): ChildRun["status"] {
 
 export function createCodexActivity(safety?: ReturnType<typeof createSessionSafety>, capture?: SessionCaptureBuilder) {
   const tools = new Map<string, ToolCall>();
+  const toolStarts = new Map<string, string>();
   const children = new Map<string, ChildRun>();
   const skills: SkillUse[] = [];
   const selectedChildren = new Map<string, string>();
@@ -150,7 +152,9 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
   let throughLine = 0;
   let truncated = false;
 
-  function writeTool(id: string, name: string, status: ToolCall["status"], line: number, mcpServer?: string) {
+  function writeTool(id: string, name: string, status: ToolCall["status"], line: number, { mcpServer, timestamp, phase }: {
+    mcpServer?: string; timestamp?: string; phase: "start" | "finish";
+  }) {
     throughLine = line;
     const existing = tools.get(id);
     if (existing) {
@@ -161,7 +165,15 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
     } else {
       truncated = true;
     }
-    return tools.get(id);
+    const tool = tools.get(id);
+    if (tool && timestamp) {
+      if (phase === "start" && status === "called" && !toolStarts.has(id)) toolStarts.set(id, timestamp);
+      if (phase === "finish" && !tool.timing) {
+        const timing = toolTiming(toolStarts.get(id), timestamp);
+        if (timing) tool.timing = timing;
+      }
+    }
+    return tool;
   }
 
   function writeChild({ id, name, status, line, index, allowNew }: {
@@ -185,7 +197,7 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
     }
   }
 
-  function response(value: unknown, line: number, projectDirectory?: string) {
+  function response(value: unknown, line: number, projectDirectory?: string, timestamp?: string) {
     const item = responseActivity.safeParse(value).data;
     if (!item) return;
     const id = item.call_id ?? item.id;
@@ -209,7 +221,7 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       }
       const status = explicitToolFailure(item.status, item.success) ? "failed" :
         item.type === "web_search_call" && item.status === "completed" ? "returned" : "called";
-      const tool = writeTool(id, name, status, line);
+      const tool = writeTool(id, name, status, line, { timestamp, phase: "start" });
       if (tool && capture) {
         const input = item.input ?? item.arguments ?? item.action;
         if (hasSensitiveToolPath(input)) privateTools.add(id);
@@ -227,7 +239,7 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       safety.result({ id, output: envelope?.[2] ?? item.output, line,
         success: failed ? false : envelope ? envelope[1] === "0" : undefined });
     }
-    const tool = writeTool(id, name, failed ? "failed" : "returned", line);
+    const tool = writeTool(id, name, failed ? "failed" : "returned", line, { timestamp, phase: "finish" });
     if (tool && capture) capture.tool(tool, line, privateTools.has(id) || hasSensitiveToolPath(item.output)
       ? { truncated: true } : { output: item.output });
     if (failed) return;
@@ -268,7 +280,7 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
 
   function event(value: unknown, line: number, sessionId: string, projectDirectory?: string, checkout?: {
     root: string; workingDirectory: string;
-  }) {
+  }, timestamp?: string) {
     const parsed = eventActivity.safeParse(value).data;
     if (!parsed || (parsed.thread_id && parsed.thread_id !== sessionId)) return;
     if (parsed.type === "sub_agent_activity") {
@@ -299,7 +311,8 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       const collaboration = collaborationItem.safeParse(parsed.item).data;
       const name = safeName(item.tool);
       if (!name || collaboration?.sender_thread_id !== sessionId) return;
-      writeTool(item.id, tools.get(item.id)?.name ?? name, status, line);
+      writeTool(item.id, tools.get(item.id)?.name ?? name, status, line,
+        { timestamp, phase: parsed.type === "item_started" ? "start" : "finish" });
       const states = collaboration.agents_states ?? {};
       const references = collaboration.receiver_agents ?? [];
       const referencesById = new Map(references.map((ref) => [ref.thread_id, ref]));
@@ -323,8 +336,10 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       item.type === "FunctionCallOutput" ? qualifiedName(item.namespace, item.name) : undefined
     );
     if (!name) return;
-    const tool = writeTool(item.id, tools.get(item.id)?.name ?? name, status, line,
-      item.type === "McpToolCall" ? safeName(item.server) : undefined);
+    const tool = writeTool(item.id, tools.get(item.id)?.name ?? name, status, line, {
+      timestamp, phase: parsed.type === "item_started" ? "start" : "finish",
+      mcpServer: item.type === "McpToolCall" ? safeName(item.server) : undefined,
+    });
     if (!capture) return;
 
     if (tool) {

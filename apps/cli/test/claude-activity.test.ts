@@ -40,7 +40,7 @@ test("Claude sync links tool and child results without including their payloads"
     entry("user", "Run an activity check."),
     mainToolUse,
     entry("assistant", mainToolUse.message.content.slice(1)),
-    result("toolu_private_shell", {}, true),
+    { ...result("toolu_private_shell", {}, true), timestamp: "2026-01-01T00:00:01.100Z" },
     result("toolu_private_skill", { success: true, commandName: "plugin:sample" }),
     result("toolu_private_agent", { status: "async_launched", agentId: "private-agent-id" }),
     entry("user", "PRIVATE_INSTRUCTIONS", { isMeta: true }),
@@ -52,6 +52,7 @@ test("Claude sync links tool and child results without including their payloads"
   assert.deepEqual(initial?.session.activity?.tools.map(({ name, status }) => [name, status]), [
     ["Bash", "failed"], ["Skill", "returned"], ["Agent", "returned"],
   ]);
+  assert.deepEqual(initial?.session.activity?.tools[0]?.timing, { startedAt: "2026-01-01T00:00:00.000Z", elapsedMs: 1_100 });
   assert.deepEqual(initial?.session.activity?.skills, [{ line: 2, index: 2, name: "plugin:sample", status: "invoked" }]);
   assert.deepEqual(initial?.session.activity?.children, [{ line: 2, index: 3, name: "Explore", status: "running" }]);
 

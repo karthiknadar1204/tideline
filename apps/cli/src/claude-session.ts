@@ -188,7 +188,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     });
     const root = checkout ?? options?.projectDirectory ?? projectDirectory;
     await activity.observe({
-      line, role: message.data.role, content: message.data.content, metadata: record.toolUseResult,
+      line, timestamp: at.data, role: message.data.role, content: message.data.content, metadata: record.toolUseResult,
       isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid,
       inProject: scopedDirectory === projectDirectory && scopedDirectory !== undefined,
       checkout: root && scopedDirectory ? { root, workingDirectory: scopedDirectory } : undefined,

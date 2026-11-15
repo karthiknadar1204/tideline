@@ -4,6 +4,7 @@ import { z } from "zod";
 import { fileReplacement, hasSensitiveToolPath } from "./session-capture";
 import type { SessionCaptureBuilder } from "./session-capture";
 import type { createSessionSafety } from "./session-safety";
+import { toolTiming } from "./session-turns";
 
 const localId = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
 const toolUse = z.object({ type: z.literal("tool_use"), id: localId, name: activityName, input: z.unknown() });
@@ -38,11 +39,12 @@ type Tool = SessionActivity["tools"][number];
 type Skill = SessionActivity["skills"][number];
 type Child = SessionActivity["children"][number];
 type Call = {
-  tool: Tool; skill?: Skill; child?: Child; agentId?: string; file?: z.infer<typeof fileInput>;
+  tool: Tool; startedAt: string; skill?: Skill; child?: Child; agentId?: string; file?: z.infer<typeof fileInput>;
   checkout?: ActivityRecord["checkout"]; privateTool?: boolean;
 };
 type ActivityRecord = {
   line: number;
+  timestamp: string;
   role: "user" | "assistant";
   content: string | unknown[];
   metadata: unknown;
@@ -83,7 +85,7 @@ export function createClaudeActivity(safety?: ReturnType<typeof createSessionSaf
     else truncated = true;
   }
 
-  async function observe({ line, role, content, metadata, isTaskNotification, attributionSkill, uuid, inProject,
+  async function observe({ line, timestamp, role, content, metadata, isTaskNotification, attributionSkill, uuid, inProject,
     checkout, readToolOutput }: ActivityRecord) {
     if (role === "assistant") {
       if (pendingSlash?.hasCompanion && attributionSkill === pendingSlash.name) {
@@ -101,7 +103,7 @@ export function createClaudeActivity(safety?: ReturnType<typeof createSessionSaf
           if (command) safety.command({ id, command, line, inProject: inProject === true });
         }
         const tool: Tool = { line, index, name, status: "called" };
-        const call: Call = { tool };
+        const call: Call = { tool, startedAt: timestamp };
         if (capture && tools.length < MAX_SESSION_ACTIVITY_ITEMS) {
           call.privateTool = hasSensitiveToolPath(input);
           if (fileTools.has(name)) {
@@ -195,6 +197,8 @@ export function createClaudeActivity(safety?: ReturnType<typeof createSessionSaf
         }
       }
       call.tool.status = failed ? "failed" : "returned";
+      const timing = toolTiming(call.startedAt, timestamp);
+      if (timing) call.tool.timing = timing;
       if (call.skill) call.skill.status = failed ? "failed" : "invoked";
       if (call.child) {
         const status = failed ? "failed" : childStatus(detail?.status);

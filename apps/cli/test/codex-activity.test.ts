@@ -40,7 +40,7 @@ test("Codex sync records named tool calls, invoked skills and a deduplicated leg
       ],
     }),
     response({ type: "function_call", name: "exec_command", call_id: "call_exec", arguments: "PRIVATE-COMMAND" }),
-    response({ type: "function_call_output", call_id: "call_exec", output: "PRIVATE-OUTPUT" }),
+    { ...response({ type: "function_call_output", call_id: "call_exec", output: "PRIVATE-OUTPUT" }), timestamp: "2026-10-01T00:00:00.850Z" },
     response({ type: "custom_tool_call", name: "apply_patch", call_id: "call_patch", input: "PRIVATE-PATCH" }),
     response({ type: "custom_tool_call_output", call_id: "call_patch", output: "PRIVATE-FAILED-OUTPUT", success: false }),
     response({ type: "function_call", name: "spawn_agent", namespace: "multi_agent_v1", call_id: "call_spawn",
@@ -60,7 +60,7 @@ test("Codex sync records named tool calls, invoked skills and a deduplicated leg
     throughLine: 11,
     truncated: false,
     tools: [
-      { line: 4, index: 0, name: "exec_command", status: "returned" },
+      { line: 4, index: 0, name: "exec_command", status: "returned", timing: { startedAt: timestamp, elapsedMs: 850 } },
       { line: 6, index: 0, name: "apply_patch", status: "failed" },
       { line: 8, index: 0, name: "multi_agent_v1:spawn_agent", status: "returned" },
     ],

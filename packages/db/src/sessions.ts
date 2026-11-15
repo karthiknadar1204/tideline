@@ -39,15 +39,18 @@ function countActivity(activity: SessionActivity | null): SessionSummary["activi
   };
 }
 
-function withKnownMcpServers(activity: SessionActivity, known: SessionActivity): SessionActivity {
+function withKnownToolDetails(activity: SessionActivity, known: SessionActivity): SessionActivity {
   const key = ({ line, index, name }: SessionActivity["tools"][number]) => `${line}:${index}:${name}`;
-  const servers = new Map(known.tools.filter(({ mcpServer }) => mcpServer).map((tool) => [key(tool), tool.mcpServer]));
-  if (!servers.size) return activity;
+  const details = new Map(known.tools.filter(({ mcpServer, timing }) => mcpServer || timing).map((tool) => [key(tool), tool]));
+  if (!details.size) return activity;
   return {
     ...activity,
     tools: activity.tools.map((tool) => {
-      const mcpServer = servers.get(key(tool));
-      return mcpServer && !tool.mcpServer ? { ...tool, mcpServer } : tool;
+      const previous = details.get(key(tool));
+      if (!previous) return tool;
+      const mcpServer = tool.mcpServer ?? previous.mcpServer;
+      const timing = tool.timing ?? previous.timing;
+      return { ...tool, ...(mcpServer && { mcpServer }), ...(timing && { timing }) };
     }),
   };
 }
@@ -136,12 +139,15 @@ async function receiveSession(
     }
     if (nextLine < previousLine || (!repositoryEnrichment && !correctsLegacyCoverage && !turnEnrichment)) analyticsUpdate = undefined;
   }
+  if (analyticsUpdate && existing.analytics?.turnTrace && !turnEnrichment) {
+    analyticsUpdate = { ...analyticsUpdate, turnTrace: existing.analytics.turnTrace };
+  }
   const previousActivityLine = existing.activity?.throughLine ?? 0;
   let activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
   if (activity && existing.activity && activity.throughLine >= previousActivityLine) {
-    const received = withKnownMcpServers(activity, existing.activity);
+    const received = withKnownToolDetails(activity, existing.activity);
     if (activity.throughLine === previousActivityLine &&
-        !isDeepStrictEqual(withKnownMcpServers(existing.activity, activity), received)) return null;
+        !isDeepStrictEqual(withKnownToolDetails(existing.activity, activity), received)) return null;
     if (!isDeepStrictEqual(existing.activity, received)) activityUpdate = received;
   }
   const previousReviewLine = existing.review?.throughLine ?? 0;

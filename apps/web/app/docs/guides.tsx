@@ -115,6 +115,7 @@ function Dashboard() {
         <h2 id="sessions">Find and read sessions</h2>
         <p>A session is a coding conversation saved by an agent. Open <strong>Sessions</strong> to search its title or text. Filter by repository and agent, or expand <strong>More filters</strong> for model and UTC dates.</p>
         <p>Open a session to read the conversation and any recorded tool calls, skills, and child agent runs. A tool marked <strong>Returned</strong> produced a result. Its child agent can still be running. Tideline shows the last status recorded in the parent session.</p>
+        <p>Open <strong>Turns</strong> to see tokens, estimated cost, and recorded timing for each prompt. When the source log records a tool call and its result, expand <strong>Tool timing</strong> to see its elapsed time and open the call in the timeline.</p>
         <p>When session details are enabled, expand a tool in <strong>Timeline</strong> to read its recorded input and output. Open <strong>Files</strong> for diffs recorded by the agent, or <strong>Setup</strong> for available runtime settings.</p>
         <p>Open <strong>Transcript</strong> to inspect redacted source records beyond the conversation view. You can download the JSONL or individual images from this view.</p>
         <p>When the collector can verify a commit reported in the session, the session shows its SHA and a link for GitHub or GitLab origins. Safety findings show the rule and log line for a possible credential or risky command. Review the finding in context.</p>

@@ -6,6 +6,12 @@ export function inputTokens(tokens: ModelTokens) {
   return tokens.input + tokens.cachedInput + tokens.cacheWrite5m + tokens.cacheWrite1h + tokens.cacheWriteUnknown;
 }
 
+export function toolTiming(startedAt: string | undefined, finishedAt: string | undefined) {
+  if (!startedAt || !finishedAt) return;
+  const elapsedMs = Date.parse(finishedAt) - Date.parse(startedAt);
+  if (Number.isSafeInteger(elapsedMs) && elapsedMs > 0) return { startedAt, elapsedMs };
+}
+
 function captureTurn(promptLine: number) {
   const usage = createModelUsage(MAX_TURN_MODELS);
   const metrics: Pick<SessionTurn, "contextWindow" | "peakRequestInput" | "durationMs" | "timeToFirstTokenMs"> = {

@@ -476,6 +476,7 @@ const activityDetail = z.strictObject({
     name: activityName,
     mcpServer: activityName.optional(),
     status: z.enum(["called", "returned", "failed"]),
+    timing: z.strictObject({ startedAt: z.iso.datetime(), elapsedMs: z.int().positive() }).optional(),
   })),
   skills: activityRows(activityLocation.extend({
     name: activityName,

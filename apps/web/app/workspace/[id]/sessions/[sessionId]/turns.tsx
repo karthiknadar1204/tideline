@@ -14,7 +14,7 @@ function formatDuration(milliseconds: number) {
 }
 
 function replyTimes(session: WorkspaceSessionDetail, throughLine: number) {
-  const times = new Map<number, { first: number | null; last: number | null }>();
+  const times = new Map<number, { startedAt: number; first: number | null; last: number | null }>();
   let promptAt: number | undefined;
   let timing: ReturnType<typeof times.get>;
   for (const message of session.messages) {
@@ -22,7 +22,7 @@ function replyTimes(session: WorkspaceSessionDetail, throughLine: number) {
     const timestamp = Date.parse(message.timestamp);
     if (message.role === "user") {
       promptAt = timestamp;
-      timing = { first: null, last: null };
+      timing = { startedAt: timestamp, first: null, last: null };
       times.set(message.line, timing);
     } else if (timing && promptAt !== undefined && timestamp >= promptAt) {
       timing.first ??= timestamp - promptAt;
@@ -30,6 +30,39 @@ function replyTimes(session: WorkspaceSessionDetail, throughLine: number) {
     }
   }
   return times;
+}
+
+function ToolTimings({ tools, timelineHref, startedAt, duration }: {
+  tools: NonNullable<WorkspaceSessionDetail["activity"]>["tools"];
+  timelineHref: string;
+  startedAt: number;
+  duration: number | null;
+}) {
+  const rows = tools.flatMap(({ timing, ...tool }) => {
+    if (!timing) return [];
+    const offset = Date.parse(timing.startedAt) - startedAt;
+    return offset < 0 ? [] : [{ ...tool, offset, elapsed: timing.elapsedMs }];
+  });
+  if (!rows.length) return null;
+  const scale = Math.max(duration ?? 0, ...rows.map(({ offset, elapsed }) => offset + elapsed));
+  return (
+    <details className="border-t border-current/10 pt-2">
+      <summary className="cursor-pointer text-xs font-medium">Tool timing · {formatCount(rows.length)} {rows.length === 1 ? "call" : "calls"}</summary>
+      <ol className="mt-3 space-y-3 text-xs">
+        {rows.map(({ line, index, name, offset, elapsed }) => (
+          <li key={`${line}:${index}`} className="space-y-1">
+            <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
+              <Link href={`${timelineHref}#tool-${line}-${index}`} prefetch={false} className={styles.textLink}>{name}</Link>
+              <span className="opacity-75">{formatDuration(elapsed)} · Started {formatDuration(offset)} after prompt</span>
+            </div>
+            <div aria-hidden="true" className="relative h-1.5 overflow-hidden rounded bg-current/10">
+              <span className="absolute top-0 h-full min-w-px rounded bg-current/50" style={{ left: `${offset / scale * 100}%`, width: `${elapsed / scale * 100}%` }} />
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
 }
 
 function TurnMetric({ label, value, note }: { label: string; value: string | null; note?: string }) {
@@ -69,6 +102,8 @@ export function SessionTurns({ session, timelineHref }: { session: WorkspaceSess
               const timing = timings.get(turn.promptLine);
               const duration = turn.durationMs ?? timing?.last ?? null;
               const first = turn.timeToFirstTokenMs ?? timing?.first ?? null;
+              const nextLine = trace.turns[index + 1]?.promptLine ?? trace.throughLine + 1;
+              const tools = session.activity?.tools.filter(({ line }) => line > turn.promptLine && line < nextLine) ?? [];
               return (
                 <li key={turn.promptLine} className="space-y-3 rounded-lg border border-current/15 p-4">
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -91,6 +126,13 @@ export function SessionTurns({ session, timelineHref }: { session: WorkspaceSess
                     <TurnMetric label={turn.timeToFirstTokenMs === null ? "First reply" : "First token"} value={first === null ? null : formatDuration(first)} />
                     <TurnMetric label={turn.durationMs === null ? "Prompt to last reply" : "Turn duration"} value={duration === null ? null : formatDuration(duration)} />
                   </dl>
+                  {turn.peakRequestInput !== null && turn.contextWindow !== null && turn.peakRequestInput <= turn.contextWindow && (
+                    <label className="flex flex-wrap items-center gap-2 text-xs opacity-75">
+                      Context window used by peak recorded request
+                      <meter value={turn.peakRequestInput} max={turn.contextWindow} className="w-24" />
+                    </label>
+                  )}
+                  {timing && tools.length > 0 && <ToolTimings tools={tools} timelineHref={timelineHref} startedAt={timing.startedAt} duration={duration} />}
                 </li>
               );
             })}
