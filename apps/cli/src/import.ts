@@ -3,6 +3,7 @@ import { readClaudeSession } from "./claude-session";
 import { approvedWorkspaceDefault } from "./cli-account";
 import { readCodexSession } from "./codex-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
+import { prepareBaseSessionImport } from "./session-turns";
 
 export type ImportOptions = {
   workspace?: string;
@@ -38,7 +39,7 @@ export async function importSession(file: string, options: ImportOptions, {
   });
   if (!payload.success) throw new Error("The file exceeds the supported message limits or contains invalid session data.");
 
-  const body = JSON.stringify(payload.data);
+  const { body } = prepareBaseSessionImport(payload.data);
   if (Buffer.byteLength(body) > MAX_CODEX_IMPORT_BYTES) {
     throw new Error("The prepared import exceeds the 1 MiB upload limit.");
   }

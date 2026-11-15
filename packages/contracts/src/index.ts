@@ -308,16 +308,56 @@ const modelUsage = z.strictObject({
   tokens: modelTokens.nullable(),
 });
 const tokenCoverage = z.enum(["reported", "partial", "unavailable"]);
+type TokenCoverage = z.infer<typeof tokenCoverage>;
+function modelBreakdown(limit: number) {
+  return z.array(modelUsage).max(limit).refine(
+    (models) => new Set(models.map(({ model }) => model)).size === models.length,
+    { message: "Model usage must contain at most one entry per model." },
+  );
+}
+function hasConsistentTokenCoverage({ models, tokenCoverage }: {
+  models: z.infer<typeof modelUsage>[];
+  tokenCoverage: TokenCoverage;
+}) {
+  return models.some(({ tokens }) => tokens !== null) === (tokenCoverage !== "unavailable");
+}
+
+export const MAX_SESSION_TURNS = 80;
+export const MAX_TURN_MODELS = 8;
+const sessionTurn = z.strictObject({
+  promptLine: z.int().positive(),
+  models: modelBreakdown(MAX_TURN_MODELS),
+  tokenCoverage,
+  contextWindow: tokenCount.positive().nullable(),
+  peakRequestInput: z.int().nonnegative().max(5_000_000_000_000).nullable(),
+  durationMs: z.int().nonnegative().nullable(),
+  timeToFirstTokenMs: z.int().nonnegative().nullable(),
+}).refine(hasConsistentTokenCoverage, {
+  path: ["tokenCoverage"], message: "Token coverage must reflect whether usage was reported.",
+}).refine(({ durationMs, timeToFirstTokenMs }) => durationMs === null || timeToFirstTokenMs === null || timeToFirstTokenMs <= durationMs, {
+  path: ["timeToFirstTokenMs"], message: "First token timing must fit within the recorded turn duration.",
+});
+const sessionTurnTrace = z.strictObject({
+  throughLine: z.int().positive(),
+  turns: z.array(sessionTurn).min(1).max(MAX_SESSION_TURNS).refine(
+    (turns) => turns.every((turn, index) => index === 0 || turns[index - 1].promptLine < turn.promptLine),
+    { message: "Turns must be in prompt order." },
+  ),
+  omittedTurns: z.int().nonnegative(),
+}).refine(({ throughLine, turns }) => throughLine >= (turns.at(-1)?.promptLine ?? 0), {
+  path: ["throughLine"], message: "Turn coverage must include the last recorded prompt.",
+});
+export type SessionTurn = z.infer<typeof sessionTurn>;
+export type SessionTurnTrace = z.infer<typeof sessionTurnTrace>;
+
 const sessionAnalytics = z.strictObject({
   throughLine: z.int().positive(),
   repository: repository.nullable(),
-  models: z.array(modelUsage).max(512).refine(
-    (models) => new Set(models.map(({ model }) => model)).size === models.length,
-    { message: "Model usage must contain at most one entry per model." },
-  ),
+  models: modelBreakdown(512),
   tokenCoverage,
+  turnTrace: sessionTurnTrace.optional(),
 }).refine(
-  ({ models, tokenCoverage }) => models.some(({ tokens }) => tokens !== null) === (tokenCoverage !== "unavailable"),
+  hasConsistentTokenCoverage,
   { path: ["tokenCoverage"], message: "Token coverage must reflect whether usage was reported." },
 );
 
@@ -521,8 +561,17 @@ export const sessionImportRequest = z.strictObject({
     review: sessionReview.optional(),
     capture: sessionCapture.optional(),
   }).refine(
-    ({ analytics, events }) => !analytics || analytics.throughLine >= (events.at(-1)?.line ?? 0),
+    ({ analytics, events }) => !analytics || (analytics.throughLine >= (events.at(-1)?.line ?? 0) &&
+      analytics.throughLine >= (analytics.turnTrace?.throughLine ?? 0)),
     { path: ["analytics", "throughLine"], message: "Analytics must cover the last conversation message." },
+  ).refine(
+    ({ analytics, events, source }) => {
+      if (!analytics?.turnTrace) return true;
+      if (source !== "codex" && source !== "claude-code") return false;
+      const promptLines = new Set(events.filter(({ role }) => role === "user").map(({ line }) => line));
+      return analytics.turnTrace.turns.every(({ promptLine }) => promptLines.has(promptLine));
+    },
+    { path: ["analytics", "turnTrace"], message: "Turns must reference recorded prompts from a supported agent." },
   ).refine(
     ({ activity, events }) => !activity || activity.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["activity", "throughLine"], message: "Activity must cover the last conversation message." },
@@ -588,7 +637,10 @@ export const sessionDetailResponse = sessionSummaryResponse.extend({
   review: reviewDetail.nullable(),
 });
 
-export const workspaceSessionDetailResponse = sessionDetailResponse.extend({ capture: sessionCapture.nullable() });
+export const workspaceSessionDetailResponse = sessionDetailResponse.extend({
+  capture: sessionCapture.nullable(),
+  turnTrace: sessionTurnTrace.optional(),
+});
 export type WorkspaceSessionDetail = z.infer<typeof workspaceSessionDetailResponse>;
 export const cliSessionExport = sessionDetailResponse.extend({ capture: sessionCapture.nullish() });
 export type CliSessionExport = z.infer<typeof cliSessionExport>;

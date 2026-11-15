@@ -19,6 +19,7 @@ import { approveInBrowser, openBrowser, postToTideline, readJson, tidelineApiOri
 import { readRepository } from "./repository";
 import { createRepositoryInstructionSync } from "./repository-instructions";
 import { redactConversationText } from "./session-safety";
+import { prepareBaseSessionImport } from "./session-turns";
 import type { LiveSession, SessionCandidate } from "./session-jsonl";
 import { openSetupConnection } from "./setup-connection";
 import type { SetupConnection } from "./setup-connection";
@@ -342,18 +343,18 @@ async function collectNewSessions(
       return;
     }
 
-    const baseBody = JSON.stringify(candidate.data);
+    const { data: base, body: baseBody } = prepareBaseSessionImport(candidate.data);
     if (Buffer.byteLength(baseBody) > MAX_CODEX_IMPORT_BYTES) {
       console.warn(`${source}: a session exceeded the 1 MiB upload limit.`);
       return;
     }
     const expanded = config.sessionDetails && capture
-      ? sessionImportRequest.safeParse({ ...candidate.data, session: { ...candidate.data.session, capture } })
+      ? sessionImportRequest.safeParse({ ...base, session: { ...base.session, capture } })
       : undefined;
     if (expanded && !expanded.success) {
       console.warn(`${source}: synced the conversation without session details outside the supported format or limits.`);
     }
-    const data = expanded?.success ? expanded.data : candidate.data;
+    const data = expanded?.success ? expanded.data : base;
     const session = data.session;
     const lastMessage = session.events.at(-1);
     if (!lastMessage) return;

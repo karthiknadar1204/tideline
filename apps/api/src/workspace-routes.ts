@@ -366,7 +366,9 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "Session not found." }, 404);
     }
     context.header("Cache-Control", "private, no-store");
-    return context.json(workspaceSessionDetailResponse.parse({ ...priceSession(session), capture: session.capture ?? null }));
+    return context.json(workspaceSessionDetailResponse.parse({
+      ...priceSession(session), capture: session.capture ?? null, turnTrace: session.analytics?.turnTrace,
+    }));
   });
 
   routes.get("/workspaces/:workspaceId/sessions/:sessionId/github-evidence", async (context) => {

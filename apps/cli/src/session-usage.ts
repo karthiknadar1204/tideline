@@ -24,16 +24,16 @@ export function combineTokens(
   };
 }
 
-export function createModelUsage() {
+export function createModelUsage(limit = 512) {
   const totals = new Map<string | null, ModelTokens | null>();
   let incomplete = false;
 
   function add(model: string | null, tokens: ModelTokens | null) {
     if (!tokens) {
-      if (model !== null && !totals.has(model) && totals.size < 511) totals.set(model, null);
+      if (model !== null && !totals.has(model) && totals.size < limit - 1) totals.set(model, null);
       return;
     }
-    const bucket = totals.has(model) || totals.size < 511 ? model : null;
+    const bucket = totals.has(model) || totals.size < limit - 1 ? model : null;
     const current = totals.get(bucket) ?? zeroTokens();
     const sum = modelTokens.safeParse(combineTokens(current, tokens, (a, b) => a + b));
     if (!sum.success) {

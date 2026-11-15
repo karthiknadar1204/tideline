@@ -10,6 +10,8 @@ import { createSessionCapture, isSensitiveFile } from "./session-capture";
 import { appendPreviewMessage, createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
+import { createSessionTurns, inputTokens } from "./session-turns";
+import type { CapturedTurn } from "./session-turns";
 import { createModelUsage, readModelId } from "./session-usage";
 
 const claudeMetadata = z.object({
@@ -133,10 +135,12 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   let projectDirectory: string | undefined;
   let checkout: string | undefined;
   const usage = createModelUsage();
+  const turns = createSessionTurns();
   const safety = options ? createSessionSafety() : undefined;
   const capture = options?.captureDetails ? createSessionCapture() : undefined;
   const activity = createClaudeActivity(safety, capture);
-  const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null }>();
+  const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null; turn?: CapturedTurn }>();
+  let turn: CapturedTurn | undefined;
   let throughLine = 0;
 
   for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails, options?.transcriptPreview)) {
@@ -199,26 +203,40 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       if (!id) {
         usage.add(model, null);
         usage.markIncomplete();
+        turn?.usage.add(model, null);
+        turn?.usage.markIncomplete();
       } else {
         const tokens = readUsage(message.data.usage);
         const previous = apiMessages.get(id);
         if (!previous) {
-          apiMessages.set(id, { model, tokens });
+          apiMessages.set(id, { model, tokens, turn });
         } else if (previous.model !== null && model !== null && previous.model !== model) {
           usage.markIncomplete();
+          previous.turn?.usage.markIncomplete();
+          turn?.usage.markIncomplete();
         } else {
+          if (previous.turn !== turn) {
+            previous.turn?.usage.markIncomplete();
+            turn?.usage.markIncomplete();
+          }
           const oldTokens = previous.tokens;
           let combined = tokens ?? oldTokens;
           if (tokens && oldTokens) {
             const laterCoversEarlier = coversUsage(tokens, oldTokens);
-            if (!laterCoversEarlier && !coversUsage(oldTokens, tokens)) usage.markIncomplete();
+            if (!laterCoversEarlier && !coversUsage(oldTokens, tokens)) {
+              usage.markIncomplete();
+              previous.turn?.usage.markIncomplete();
+            }
             const selected = laterCoversEarlier ? tokens : oldTokens;
             const other = laterCoversEarlier ? oldTokens : tokens;
             const refined = retainCacheBreakdown(selected, other);
-            if (!refined) usage.markIncomplete();
+            if (!refined) {
+              usage.markIncomplete();
+              previous.turn?.usage.markIncomplete();
+            }
             combined = refined ?? selected;
           }
-          apiMessages.set(id, { model: model ?? previous.model, tokens: combined });
+          apiMessages.set(id, { ...previous, model: model ?? previous.model, tokens: combined });
         }
       }
     }
@@ -236,14 +254,20 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       if (total === null) break;
       previewBytes = total;
     } else events.push(event);
+    if (message.data.role === "user") turn = turns.start(line);
     throughLine = line;
   }
 
-  for (const { model, tokens } of apiMessages.values()) {
+  for (const { model, tokens, turn } of apiMessages.values()) {
     usage.add(model, tokens);
     if (!tokens) usage.markIncomplete();
+    if (turn) {
+      turn.usage.add(model, tokens);
+      if (tokens) turn.metrics.peakRequestInput = Math.max(turn.metrics.peakRequestInput ?? 0, inputTokens(tokens));
+      else turn.usage.markIncomplete();
+    }
   }
-  const analytics = usage.snapshot(throughLine);
+  const analytics = { ...usage.snapshot(throughLine), turnTrace: turns.snapshot(throughLine) };
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {

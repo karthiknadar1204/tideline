@@ -6,6 +6,8 @@ import { createSessionCapture } from "./session-capture";
 import { appendPreviewMessage, createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
+import { createSessionTurns, inputTokens } from "./session-turns";
+import type { CapturedTurn } from "./session-turns";
 import { combineTokens, createModelUsage, readModelId, zeroTokens } from "./session-usage";
 
 const rolloutRecord = z.object({
@@ -31,13 +33,26 @@ const turnContext = z.object({
   sandbox_policy: z.object({ type: z.unknown() }).optional().catch(undefined),
 });
 const tokenEvent = z.object({ type: z.literal("token_count"), info: z.unknown().optional() });
+const contextWindow = z.int().positive().max(1_000_000_000_000).nullish().catch(null);
+const duration = z.int().nonnegative().nullish().catch(null);
+const taskEvent = z.object({
+  type: z.enum(["task_started", "task_complete", "turn_aborted"]),
+  turn_id: z.string().min(1).max(200),
+  root_turn_id: z.string().nullish().catch(null),
+  model_context_window: contextWindow,
+  duration_ms: duration,
+  time_to_first_token_ms: duration,
+}).refine(({ root_turn_id, turn_id }) => !root_turn_id || root_turn_id === turn_id);
+const codexTokens = z.object({
+  input_tokens: z.int().nonnegative(),
+  cached_input_tokens: z.int().nonnegative(),
+  cache_write_input_tokens: z.int().nonnegative().default(0),
+  output_tokens: z.int().nonnegative(),
+});
 const codexTokenTotals = z.object({
-  total_token_usage: z.object({
-    input_tokens: z.int().nonnegative(),
-    cached_input_tokens: z.int().nonnegative(),
-    cache_write_input_tokens: z.int().nonnegative().default(0),
-    output_tokens: z.int().nonnegative(),
-  }),
+  total_token_usage: codexTokens,
+  last_token_usage: codexTokens.nullish().catch(null),
+  model_context_window: contextWindow,
 });
 const nestedSource = z.object({
   subagent: z.unknown().optional(),
@@ -47,6 +62,11 @@ const rolloutTimestamp = z.iso.datetime();
 const messageRecord = z.object({ type: z.literal("message"), role: z.enum(["user", "assistant"]) });
 const messageContent = z.object({ content: z.array(z.unknown()) });
 const textPart = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() });
+
+function normalizeTokens({ input_tokens, cached_input_tokens: cached, cache_write_input_tokens: written,
+  output_tokens: output }: z.infer<typeof codexTokens>) {
+  return { ...zeroTokens(), input: input_tokens - cached - written, cachedInput: cached, cacheWriteUnknown: written, output };
+}
 
 function isRootSession(metadata: z.infer<typeof sessionMetadata>) {
   const { parent_thread_id: parentThread, forked_from_id: forkedFrom, source, thread_source: threadSource } = metadata;
@@ -81,6 +101,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   let projectDirectory: string | undefined;
   let checkout: string | undefined;
   const usage = createModelUsage();
+  const turns = createSessionTurns();
   const safety = options ? createSessionSafety() : undefined;
   const capture = options?.captureDetails ? createSessionCapture() : undefined;
   const activity = createCodexActivity(safety, capture);
@@ -91,6 +112,9 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   let activeModel: string | null = null;
   const modelsSinceLastUsage = new Set<string | null>();
   let previousTokens = zeroTokens();
+  let turn: CapturedTurn | undefined;
+  let task: { id: string; contextWindow: number | null } | undefined;
+  let usageMaySpanTurns = false;
 
   for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails, options?.transcriptPreview)) {
     const record = rolloutRecord.safeParse(value);
@@ -153,28 +177,54 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       const root = checkout ?? options?.projectDirectory ?? projectDirectory;
       activity.event(record.data.payload, line, session.sourceSessionId, projectDirectory,
         root && currentProject ? { root, workingDirectory: currentProject } : undefined);
+      const taskUpdate = taskEvent.safeParse(record.data.payload).data;
+      if (taskUpdate?.type === "task_started") {
+        task = { id: taskUpdate.turn_id, contextWindow: taskUpdate.model_context_window ?? null };
+        turn = undefined;
+      } else if (taskUpdate && task && taskUpdate.turn_id === task.id) {
+        if (turn && taskUpdate.type === "task_complete") {
+          turn.metrics.durationMs = taskUpdate.duration_ms ?? null;
+          const first = taskUpdate.time_to_first_token_ms ?? null;
+          if (first !== null && (turn.metrics.durationMs === null || first <= turn.metrics.durationMs)) {
+            turn.metrics.timeToFirstTokenMs = first;
+          }
+          if (turn.metrics.durationMs !== null || turn.metrics.timeToFirstTokenMs !== null) throughLine = line;
+        }
+        turn = undefined;
+        task = undefined;
+      }
       const count = tokenEvent.safeParse(record.data.payload);
       if (!count.success || count.data.info == null) continue;
       throughLine = line;
       const current = codexTokenTotals.safeParse(count.data.info);
       if (!current.success) {
         usage.markIncomplete();
+        turn?.usage.markIncomplete();
         continue;
       }
-      const {
-        input_tokens: input, cached_input_tokens: cached,
-        cache_write_input_tokens: written, output_tokens: output,
-      } = current.data.total_token_usage;
-      const totals = { ...zeroTokens(), input: input - cached - written, cachedInput: cached, cacheWriteUnknown: written, output };
+      const totals = normalizeTokens(current.data.total_token_usage);
       const difference = modelTokens.safeParse(combineTokens(totals, previousTokens, (a, b) => a - b));
       if (!difference.success) {
         usage.markIncomplete();
+        turn?.usage.markIncomplete();
         continue;
       }
       previousTokens = totals;
+      if (turn && current.data.model_context_window) turn.metrics.contextWindow = current.data.model_context_window;
       const hasNewUsage = Object.values(difference.data).some((value) => value > 0);
       if (hasNewUsage) {
-        usage.add(modelsSinceLastUsage.size > 1 ? null : activeModel, difference.data);
+        const model = modelsSinceLastUsage.size > 1 ? null : activeModel;
+        usage.add(model, difference.data);
+        if (turn) {
+          const request = current.data.last_token_usage && normalizeTokens(current.data.last_token_usage);
+          const matchesRequest = request && Object.values(combineTokens(difference.data, request, (a, b) => a - b)).every((value) => value === 0);
+          if (!usageMaySpanTurns || matchesRequest) turn.usage.add(model, difference.data);
+          else turn.usage.markIncomplete();
+          if (request && matchesRequest) {
+            turn.metrics.peakRequestInput = Math.max(turn.metrics.peakRequestInput ?? 0, inputTokens(request));
+          }
+        }
+        usageMaySpanTurns = false;
         modelsSinceLastUsage.clear();
         lastUsageLine = line;
       }
@@ -214,12 +264,20 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
       if (total === null) break;
       previewBytes = total;
     } else events.push(event);
-    if (message.data.role === "user") lastPromptLine = line;
+    if (message.data.role === "user") {
+      if (!task || !turn) {
+        if (lastPromptLine > lastUsageLine) usageMaySpanTurns = true;
+        turn = turns.start(line);
+        turn.metrics.contextWindow = task?.contextWindow ?? null;
+      }
+      lastPromptLine = line;
+      turn.usage.add(activeModel, null);
+    }
     throughLine = line;
   }
 
   if (lastPromptLine > lastUsageLine) usage.markIncomplete();
-  const analytics = usage.snapshot(throughLine);
+  const analytics = { ...usage.snapshot(throughLine), turnTrace: turns.snapshot(throughLine) };
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {

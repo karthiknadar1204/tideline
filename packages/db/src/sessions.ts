@@ -122,6 +122,8 @@ async function receiveSession(
   const previousLine = existing.analytics?.throughLine ?? 0;
   const nextLine = analytics?.throughLine ?? 0;
   const repositoryEnrichment = analytics?.repository && !existing.analytics?.repository;
+  const turnTrace = analytics?.turnTrace;
+  const turnEnrichment = turnTrace && turnTrace.throughLine > (existing.analytics?.turnTrace?.throughLine ?? 0);
   const correctsLegacyCoverage = removesLegacyContext && isDeepStrictEqual(existing.analytics?.models, analytics?.models);
   const legacyContextReplay = source === "codex" && !activity && events.length !== messages.length;
   let analyticsUpdate = analytics;
@@ -132,7 +134,7 @@ async function receiveSession(
     ))) {
       return null;
     }
-    if (nextLine < previousLine || (!repositoryEnrichment && !correctsLegacyCoverage)) analyticsUpdate = undefined;
+    if (nextLine < previousLine || (!repositoryEnrichment && !correctsLegacyCoverage && !turnEnrichment)) analyticsUpdate = undefined;
   }
   const previousActivityLine = existing.activity?.throughLine ?? 0;
   let activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
@@ -171,6 +173,7 @@ async function receiveSession(
       readyMessageCount: removesLegacyContext ? 0 : undefined,
       pendingAnalytics: analyticsUpdate && {
         ...analyticsUpdate, repository: existing.analytics?.repository ?? analyticsUpdate.repository,
+        turnTrace: turnEnrichment ? turnTrace : existing.analytics?.turnTrace,
       },
       pendingActivity: activityUpdate,
       pendingReview: reviewUpdate,
@@ -544,6 +547,8 @@ export function createSessionStore(databaseUrl: string) {
               is distinct from (${agentSessions.readyAnalytics} ->> 'throughLine')
             or (${agentSessions.pendingAnalytics} -> 'repository' ->> 'key')
               is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')
+            or (${agentSessions.pendingAnalytics} -> 'turnTrace' ->> 'throughLine')
+              is distinct from (${agentSessions.readyAnalytics} -> 'turnTrace' ->> 'throughLine')
             or ${agentSessions.pendingActivity} is distinct from ${agentSessions.readyActivity}
             or ${agentSessions.pendingReview} is distinct from ${agentSessions.readyReview}
             or ${agentSessions.pendingCapture} is not null`)

@@ -12,6 +12,7 @@ const views = [
   { id: "subagents", label: "Subagents" },
   { id: "files", label: "Files" },
   { id: "setup", label: "Setup" },
+  { id: "turns", label: "Turns" },
   { id: "usage", label: "Usage" },
   { id: "review", label: "Review" },
 ] as const;

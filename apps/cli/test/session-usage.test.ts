@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { estimateSessionModelCost, sessionImportRequest } from "@tideline/contracts";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -57,6 +58,54 @@ test("Codex usage advances after the last reply without counting repeated totals
   assert.equal(pending?.session.analytics?.tokenCoverage, "partial");
 });
 
+test("Codex traces root turns and reads completion timing after the last reply", async (context) => {
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), "tideline-codex-turns-")));
+  context.after(() => rm(cwd, { force: true, recursive: true }));
+  const file = join(cwd, "codex.jsonl");
+  const record = (type: string, payload: object) => ({ timestamp, type, payload });
+  const user = (text: string) => record("response_item", { type: "message", role: "user", content: [{ type: "input_text", text }] });
+  const tokens = (input: number, cached: number, output: number) => ({
+    input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 6,
+  });
+  const first = tokens(100, 40, 10);
+  const second = tokens(150, 70, 20);
+  const count = (total: object, last: object) => record("event_msg", {
+    type: "token_count", info: { total_token_usage: total, last_token_usage: last, model_context_window: 258400 },
+  });
+  await writeFile(file, jsonl(
+    record("session_meta", { id: randomUUID(), cwd }),
+    record("event_msg", { type: "task_started", turn_id: "first", model_context_window: 258400 }),
+    record("turn_context", { cwd, model: "gpt-5.4" }),
+    user("Sample prompt"),
+    record("event_msg", { type: "task_started", turn_id: "child", root_turn_id: "first" }),
+    count(first, first),
+    count(first, first),
+    user("A steering prompt during the same turn"),
+    count(second, tokens(50, 30, 10)),
+    record("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "Sample reply" }] }),
+  ));
+  const live = await readCodexSession(file, { live: true, projectDirectory: cwd });
+  assert.equal(live?.session.analytics?.turnTrace?.turns[0]?.durationMs, null);
+  await appendFile(file, jsonl(
+    record("event_msg", { type: "task_complete", turn_id: "first", duration_ms: 2300, time_to_first_token_ms: 230 }),
+    record("event_msg", { type: "task_started", turn_id: "second" }),
+    user("Pending prompt"),
+  ));
+  const parsed = await readCodexSession(file);
+  const trace = parsed.analytics?.turnTrace;
+  assert.ok(trace);
+  assert.equal(trace.throughLine, 13);
+  assert.equal(trace.omittedTurns, 0);
+  assert.deepEqual(trace.turns.map(({ promptLine, tokenCoverage }) => [promptLine, tokenCoverage]), [[4, "reported"], [13, "unavailable"]]);
+  assert.deepEqual(trace.turns[0], {
+    promptLine: 4, tokenCoverage: "reported", contextWindow: 258400, peakRequestInput: 100,
+    durationMs: 2300, timeToFirstTokenMs: 230,
+    models: [{ model: "gpt-5.4", tokens: { input: 80, cachedInput: 70, cacheWrite5m: 0, cacheWrite1h: 0, cacheWriteUnknown: 0, output: 20 } }],
+  });
+  assert.equal(typeof estimateSessionModelCost("codex", trace.turns[0].models[0]), "number");
+  assert.equal(sessionImportRequest.safeParse({ version: 1, workspaceId: randomUUID(), session: parsed }).success, true);
+});
+
 test("Claude counts message IDs once and keeps cache lifetimes from earlier blocks", async (context) => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "tideline-claude-")));
   context.after(() => rm(cwd, { force: true, recursive: true }));
@@ -86,6 +135,20 @@ test("Claude counts message IDs once and keeps cache lifetimes from earlier bloc
     model: "claude-sonnet-4-6",
     tokens: { input: 30, cachedInput: 5, cacheWrite5m: 100, cacheWrite1h: 0, cacheWriteUnknown: 0, output: 5 },
   }]);
+  const trace = parsed?.session.analytics?.turnTrace;
+  assert.deepEqual(trace?.turns, [{
+    promptLine: 1, tokenCoverage: "reported", models: parsed?.session.analytics?.models,
+    contextWindow: null, peakRequestInput: 120, durationMs: null, timeToFirstTokenMs: null,
+  }]);
+  await appendFile(file, jsonl(
+    entry("user", { role: "user", content: "Another prompt" }),
+    reply("msg_third", { input_tokens: 1, output_tokens: 1 }, [{ type: "text", text: "Another reply" }]),
+    reply("msg_first", { ...tokens, output_tokens: 2 }, [tool]),
+  ));
+  const updated = await readClaudeSession(file);
+  const turns = updated.analytics?.turnTrace?.turns;
+  assert.deepEqual(turns?.map(({ promptLine, tokenCoverage }) => [promptLine, tokenCoverage]), [[1, "partial"], [6, "partial"]]);
+  assert.deepEqual(turns?.map(({ models }) => models[0]?.tokens?.output), [5, 1]);
 });
 
 test("repository keys group clone transport variants and send only the repository name", async (context) => {

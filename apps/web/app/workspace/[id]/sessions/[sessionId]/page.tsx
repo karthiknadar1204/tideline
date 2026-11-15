@@ -18,6 +18,7 @@ import { SessionSubagents } from "./subagents";
 import { FullTranscript } from "./full-transcript";
 import { SessionGitHubEvidence } from "./github-evidence";
 import { buildSessionTimeline } from "./timeline";
+import { SessionTurns } from "./turns";
 
 const startedDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
 
@@ -157,6 +158,7 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
           subagents: <SessionSubagents session={session} capture={session.capture} />,
           files: <SessionFiles capture={session.capture} source={session.source} />,
           setup: <SessionSetup capture={session.capture} session={session} />,
+          turns: <SessionTurns session={session} timelineHref={sessionDetailHref(id, sessionId, filters)} />,
           usage: <SessionUsage analytics={session.analytics} />,
           review: (
             <>
