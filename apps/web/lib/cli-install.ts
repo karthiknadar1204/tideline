@@ -75,8 +75,20 @@ install_tideline() {
   trap 'rm -rf "$stage"; if [ -n "$launcher" ]; then rm -f "$launcher"; fi' 0
 
   printf '%s\\n' 'Downloading the Tideline CLI…'
-  curl -fsSL ${shellQuote(new URL("/cli/tideline.mjs", web).href)} -o "$stage/tideline.mjs"
-  digest=$(node -e 'const {createHash}=require("node:crypto"); const {readFileSync}=require("node:fs"); process.stdout.write(createHash("sha256").update(readFileSync(process.argv[1])).digest("hex"))' "$stage/tideline.mjs")
+  curl -fsS --max-time 15 ${shellQuote(new URL("/cli/release", web).href)} -o "$stage/release.json"
+  curl -fsS --max-time 30 ${shellQuote(new URL("/cli/tideline.mjs", web).href)} -o "$stage/tideline.mjs"
+  digest=$(node -e '
+    const {createHash}=require("node:crypto");
+    const {readFileSync}=require("node:fs");
+    const release=JSON.parse(readFileSync(process.argv[1],"utf8"));
+    const bundle=readFileSync(process.argv[2]);
+    const digest=createHash("sha256").update(bundle).digest("hex");
+    if (release.sha256!==digest || release.size!==bundle.length) {
+      console.error("The CLI download differs from the current release. Try again.");
+      process.exit(1);
+    }
+    process.stdout.write(digest);
+  ' "$stage/release.json" "$stage/tideline.mjs")
   mv -f "$stage/tideline.mjs" "$runtime/$digest.mjs"
   launcher=$(mktemp "$bin/.tideline.XXXXXXXX")
   {

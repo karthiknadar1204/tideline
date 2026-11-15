@@ -1,15 +1,22 @@
 import Link from "next/link";
+import { repositorySyncResponse } from "@tideline/contracts";
 import { teamLink, teamPanel } from "../../../../../lib/team-ui";
-import { hasWorkspaceCliApproval, searchWorkspaceSessions } from "../../../../../lib/workspace";
+import { fetchWorkspaceResource, hasWorkspaceCliApproval, searchWorkspaceSessions } from "../../../../../lib/workspace";
+import { CopyTerminalCommand } from "../../../../copy-terminal-command";
 import { RefreshSessions } from "../../refresh-sessions";
 import { SyncSetup } from "../../sync-setup";
 
-export default async function WorkspaceUploadsSettings({ params }: PageProps<"/workspace/[id]/settings/uploads">) {
-  const { id } = await params;
-  const [{ sessions, repositories }, approved] = await Promise.all([
+const stateLabels = { enabled: "Enabled", paused: "Paused", unreported: "Unreported" };
+
+export default async function WorkspaceUploadsSettings({ params, searchParams }: PageProps<"/workspace/[id]/settings/uploads">) {
+  const [{ id }, { q }] = await Promise.all([params, searchParams]);
+  const query = typeof q === "string" ? q.trim().replaceAll("\0", "").slice(0, 100) : "";
+  const [{ sessions }, approved, response] = await Promise.all([
     searchWorkspaceSessions(id, { page: 1 }),
     hasWorkspaceCliApproval(id),
+    fetchWorkspaceResource(`${encodeURIComponent(id)}/repository-sync?${new URLSearchParams({ q: query })}`, { allowNotFound: true }),
   ]);
+  const repositories = response?.ok ? repositorySyncResponse.parse(await response.json()) : [];
   const base = `/workspace/${id}`;
   const recent = sessions[0];
 
@@ -29,18 +36,34 @@ export default async function WorkspaceUploadsSettings({ params }: PageProps<"/w
       </section>
       <SyncSetup workspaceId={id} />
       <section className={teamPanel} aria-labelledby="synced-repositories">
-        <h2 id="synced-repositories" className="font-semibold">Repositories with synced sessions</h2>
+        <h2 id="synced-repositories" className="font-semibold">Repository uploads</h2>
+        <p className="text-sm text-[var(--workspace-muted)]">Run the picker on the computer where you want to change the selection.</p>
+        <CopyTerminalCommand command="tideline upload" label="Copy repository picker command" />
+        <form className="flex flex-wrap items-center gap-2" action={`${base}/settings/uploads`}>
+          <label className="sr-only" htmlFor="upload-repo-search">Find a repository</label>
+          <input type="search" id="upload-repo-search" name="q" maxLength={100} defaultValue={query} placeholder="Find a repository"
+            className="min-w-0 flex-1 rounded-lg border border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-3 py-2 text-sm" />
+          <button type="submit" className="rounded-lg border border-[var(--workspace-border)] px-3 py-2 text-sm font-medium">Find</button>
+        </form>
         {repositories.length > 0 ? (
-          <ul className="divide-y divide-[var(--workspace-border)] border-t border-[var(--workspace-border)]">
-            {repositories.map(({ key, name }) => (
-              <li key={key}>
-                <Link href={`${base}/repositories?${new URLSearchParams({ repository: key })}`} className="flex items-center gap-3 py-2.5 text-sm hover:text-[var(--workspace-accent)] focus-visible:outline-2">
-                  <span className="min-w-0 flex-1 break-words">{name}</span><span aria-hidden="true" className="text-[var(--workspace-muted)]">↗</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="text-sm text-[var(--workspace-muted)]">Repositories appear after you sync their first session.</p>}
+          <div className="min-w-0 overflow-x-auto rounded-lg border border-[var(--workspace-border)]">
+            <table className="min-w-full divide-y divide-[var(--workspace-border)] text-left text-sm">
+              <thead className="bg-[var(--workspace-subtle)] text-[var(--workspace-muted)]"><tr>
+                <th className="p-3" scope="col">Repository</th><th className="p-3" scope="col">Synced sessions</th><th className="p-3" scope="col">Auto-upload</th>
+              </tr></thead>
+              <tbody className="divide-y divide-[var(--workspace-border)]">
+                {repositories.map(({ key, name, sessions: count, state }) => (
+                  <tr key={key}>
+                    <th className="break-all p-3 font-medium" scope="row">{count ? <Link className={teamLink} href={`${base}/repositories?${new URLSearchParams({ repository: key, days: "all" })}`}>{name}</Link> : name}</th>
+                    <td className="p-3 tabular-nums">{count.toLocaleString("en-US")}</td>
+                    <td className="p-3"><span className={state === "enabled" ? "font-medium text-[var(--workspace-accent)]" : "text-[var(--workspace-muted)]"}>{stateLabels[state]}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="text-sm text-[var(--workspace-muted)]">{query ? "No repositories match this search." : "Repositories appear once a collector reports them or syncs their first session."}</p>}
+        {repositories.length === 100 && <p className="text-sm text-[var(--workspace-muted)]">Showing the first 100 repositories. Use search to find more.</p>}
       </section>
     </main>
   );

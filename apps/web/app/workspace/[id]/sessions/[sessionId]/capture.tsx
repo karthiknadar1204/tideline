@@ -34,7 +34,7 @@ function CaptureUnavailable({ source }: { source: Source }) {
   );
 }
 
-function DiffText({ diff, path }: { diff: string; path: string }) {
+export function DiffText({ diff, path }: { diff: string; path: string }) {
   const lines = diff.split("\n");
   let insideHunk = false;
 

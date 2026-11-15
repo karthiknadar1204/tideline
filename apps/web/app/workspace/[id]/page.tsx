@@ -1,10 +1,12 @@
+import { auth } from "@clerk/nextjs/server";
 import { sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
-import type { WorkspaceSessionSearchQuery, WorkspaceSessionSearchResponse } from "@tideline/contracts";
+import type { WorkspaceSessionSearchQuery, WorkspaceSessionSearchWithFacets } from "@tideline/contracts";
 import Form from "next/form";
 import Link from "next/link";
 import { parseSessionFilters, sessionDetailHref, sessionFilterParams, sessionHasFilters, sessionListHref } from "../../../lib/session-filters";
 import { formatCost, formatCount, summarizeSession } from "../../../lib/usage";
-import { hasWorkspaceCliApproval, readWorkspaceAccess, searchWorkspaceSessions } from "../../../lib/workspace";
+import { hasWorkspaceCliApproval, readWorkspaceAccess, readWorkspaceTeam, searchWorkspaceSessions } from "../../../lib/workspace";
+import { workspaceMemberLabels } from "../../../lib/workspace-members";
 import { FirstSessionSetup } from "./first-session-setup";
 import { SessionMenu } from "./sessions/session-menu";
 import { SessionRefresh } from "./sessions/session-refresh";
@@ -17,20 +19,38 @@ const sortChoices = [
   { key: "oldest", label: "Oldest started" },
 ] as const;
 
-function Filters({ workspaceId, filters, data, invalid }: {
+const ranges = [
+  { title: "Estimated cost (USD)", min: "minCost", max: "maxCost", format: formatCost, decimal: true },
+  { title: "Reported tokens", min: "minTokens", max: "maxTokens", format: formatCount, decimal: false },
+  { title: "Recorded duration (minutes)", min: "minDurationMinutes", max: "maxDurationMinutes", format: formatCount, decimal: true },
+  { title: "Messages", min: "minMessages", max: "maxMessages", format: formatCount, decimal: false },
+] as const;
+
+function Filters({ workspaceId, filters, data, invalid, members }: {
   workspaceId: string;
   filters: WorkspaceSessionSearchQuery;
-  data: WorkspaceSessionSearchResponse;
+  data: WorkspaceSessionSearchWithFacets;
   invalid: boolean;
+  members: Map<string, string> | undefined;
 }) {
   const home = `/workspace/${workspaceId}`;
   const selectedRepository = data.repositories.find(({ key }) => key === filters.repository);
   const refinements = [
+    ["sessionId", filters.sessionId && `Session ${filters.sessionId}`],
     ["repository", filters.repository && (selectedRepository?.name ?? "Unavailable repository")],
     ["source", filters.source && sessionSourceLabel[filters.source]],
     ["model", filters.model],
+    ["member", filters.member && (members?.get(filters.member) ?? "Unavailable member")],
+    ["skill", filters.skill && `Skill ${filters.skill}`],
+    ["subagent", filters.subagent && `Subagent ${filters.subagent}`],
+    ["failedTools", filters.failedTools === "yes" ? "Failed tools" : filters.failedTools === "no" ? "No failed tools" : undefined],
+    ["frustration", filters.frustration === "reported" ? "Reported frustration" : undefined],
     ["from", filters.from && `From ${filters.from}`],
     ["to", filters.to && `Through ${filters.to}`],
+    ...ranges.flatMap(({ title, min, max, format }) => [
+      [min, filters[min] === undefined ? undefined : `Minimum ${title.toLowerCase()} ${format(filters[min])}`] as const,
+      [max, filters[max] === undefined ? undefined : `Maximum ${title.toLowerCase()} ${format(filters[max])}`] as const,
+    ]),
   ] as const;
   const active = refinements.filter(([, label]) => label);
   const clear = sessionListHref(workspaceId, { page: 1, sort: filters.sort });
@@ -41,11 +61,11 @@ function Filters({ workspaceId, filters, data, invalid }: {
         {filters.sort && <input type="hidden" name="sort" value={filters.sort} />}
         <div className={styles.search}>
           <label htmlFor="session-query" className="sr-only">Search sessions</label>
-          <input id="session-query" className={styles.searchField} type="search" name="query" placeholder="Search titles and conversations" maxLength={200} defaultValue={filters.query ?? ""} />
+          <input id="session-query" className={styles.searchField} type="search" name="query" placeholder="Search sessions by text or ID" maxLength={200} defaultValue={filters.query ?? ""} />
           <button type="submit" className={styles.control}>Search</button>
         </div>
         <SessionMenu initiallyOpen={invalid} label={<>Filters{active.length > 0 && <span className={styles.filterCount}>{active.length}</span>} <span aria-hidden="true">⌄</span></>}>
-          <div className={styles.popover}>
+          <div className={`${styles.popover} ${styles.filterPopover}`}>
             <div className={styles.filterFields}>
               <div className={styles.label}>
                 <label htmlFor="session-repository">Repository</label>
@@ -70,6 +90,17 @@ function Filters({ workspaceId, filters, data, invalid }: {
                   {filters.model && !data.models.includes(filters.model) && <option value={filters.model}>{filters.model}</option>}
                 </select>
               </div>
+              {members && (
+                <div className={styles.label}>
+                  <label htmlFor="session-member">Member</label>
+                  <select id="session-member" className={styles.field} name="member" defaultValue={filters.member ?? ""}>
+                    <option value="">All members</option>
+                    {[...members].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                    {filters.member && !members.has(filters.member) && <option value={filters.member}>Unavailable member</option>}
+                  </select>
+                </div>
+              )}
+              {!members && filters.member && <input type="hidden" name="member" value={filters.member} />}
               <div className={styles.filterDates}>
                 <label className={styles.label}>
                   <span>From (UTC)</span>
@@ -80,6 +111,52 @@ function Filters({ workspaceId, filters, data, invalid }: {
                   <input className={styles.field} type="date" name="to" defaultValue={filters.to ?? ""} />
                 </label>
               </div>
+              <label className={styles.label}>
+                <span>Session ID</span>
+                <input className={styles.field} name="sessionId" maxLength={36} spellCheck={false} defaultValue={filters.sessionId ?? ""} />
+              </label>
+              <div className={styles.filterDates}>
+                <label className={styles.label}>
+                  <span>Skill</span>
+                  <input className={styles.field} name="skill" list="session-skills" maxLength={100} defaultValue={filters.skill ?? ""} />
+                </label>
+                <datalist id="session-skills">{data.skills.map((name) => <option value={name} key={name} />)}</datalist>
+                <label className={styles.label}>
+                  <span>Subagent type</span>
+                  <input className={styles.field} name="subagent" list="session-subagents" maxLength={100} defaultValue={filters.subagent ?? ""} />
+                </label>
+                <datalist id="session-subagents">{data.subagents.map((name) => <option value={name} key={name} />)}</datalist>
+              </div>
+              <div className={styles.label}>
+                <label htmlFor="session-tool-errors">Tool errors</label>
+                <select id="session-tool-errors" className={styles.field} name="failedTools" defaultValue={filters.failedTools ?? ""}>
+                  <option value="">Any recorded outcome</option>
+                  <option value="yes">Has failed tools</option>
+                  <option value="no">No failed tools</option>
+                </select>
+              </div>
+              <label className={styles.label}>
+                <span>Reported frustration</span>
+                <select className={styles.field} name="frustration" defaultValue={filters.frustration ?? ""}>
+                  <option value="">All sessions</option>
+                  <option value="reported">User explicitly reported frustration or requested rework</option>
+                </select>
+              </label>
+              {ranges.map(({ title, min, max, decimal }) => (
+                <fieldset className={styles.filterRange} key={title}>
+                  <legend>{title}</legend>
+                  <div className={styles.filterDates}>
+                    <label className={styles.label}>
+                      <span>Min</span>
+                      <input aria-label={`Minimum ${title.toLowerCase()}`} className={styles.field} name={min} type="number" min="0" step={decimal ? "any" : "1"} defaultValue={filters[min] ?? ""} />
+                    </label>
+                    <label className={styles.label}>
+                      <span>Max</span>
+                      <input aria-label={`Maximum ${title.toLowerCase()}`} className={styles.field} name={max} type="number" min="0" step={decimal ? "any" : "1"} defaultValue={filters[max] ?? ""} />
+                    </label>
+                  </div>
+                </fieldset>
+              ))}
             </div>
             <div className={styles.filterActions}>
               {sessionHasFilters(filters) && <Link className={styles.textLink} href={clear}>Clear all</Link>}
@@ -106,7 +183,7 @@ function Filters({ workspaceId, filters, data, invalid }: {
           ))}
         </div>
       )}
-      {invalid && <p role="alert" className={styles.muted}>Check the filters and make sure the start date is on or before the end date.</p>}
+      {invalid && <p role="alert" className={styles.muted}>Check the filter values. Minimums and start dates must come before maximums and end dates.</p>}
     </div>
   );
 }
@@ -114,7 +191,7 @@ function Filters({ workspaceId, filters, data, invalid }: {
 function SessionList({ id, filters, data }: {
   id: string;
   filters: WorkspaceSessionSearchQuery;
-  data: WorkspaceSessionSearchResponse;
+  data: WorkspaceSessionSearchWithFacets;
 }) {
   const pages = Math.ceil(data.total / WORKSPACE_SESSION_PAGE_SIZE);
   const first = (data.page - 1) * WORKSPACE_SESSION_PAGE_SIZE + 1;
@@ -191,11 +268,15 @@ function SessionList({ id, filters, data }: {
 export default async function WorkspacePage({ params, searchParams }: PageProps<"/workspace/[id]">) {
   const { id } = await params;
   const { filters, invalid } = parseSessionFilters(await searchParams);
-  const data = await searchWorkspaceSessions(id, filters);
+  const [data, workspace] = await Promise.all([searchWorkspaceSessions(id, filters), readWorkspaceAccess(id)]);
   const unfilteredFirstPage = !sessionHasFilters(filters) && data.page === 1;
   const firstSession = unfilteredFirstPage && !invalid && filters.page === 1 && !filters.sort && data.total === 0
-    ? await readWorkspaceAccess(id)
+    ? workspace
     : null;
+  const members = workspace.kind === "team" && !firstSession
+    ? await Promise.all([readWorkspaceTeam(id), auth()]).then(([team, viewer]) =>
+      workspaceMemberLabels(team.members, viewer.userId ?? undefined))
+    : undefined;
 
   return (
     <main className={styles.page}>
@@ -205,7 +286,7 @@ export default async function WorkspacePage({ params, searchParams }: PageProps<
             <h1>Sessions</h1>
             <SessionRefresh label="Refresh sessions" whenIdle={unfilteredFirstPage} />
           </header>
-          <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} />
+          <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} members={members} />
           <SessionList id={id} filters={filters} data={data} />
         </>
       )}

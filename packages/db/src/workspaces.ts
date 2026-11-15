@@ -1,9 +1,10 @@
-import type { CliAccount, TeamMemberRole, WorkspaceAccess, WorkspaceRole, WorkspaceUsageTargetUpdate, WorkspaceUsageTargets } from "@tideline/contracts";
+import type { CliAccount, TeamMemberRole, WorkspaceAccess, WorkspaceAddress, WorkspaceRole, WorkspaceUsageTargetUpdate, WorkspaceUsageTargets } from "@tideline/contracts";
 import { and, asc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { cliGrants, syncGrants, workspaceInvites, workspaceMembers, workspaces } from "./schema";
+import { accountActive, accountIsRetiring, deleteWorkspaceData, directoryIsBlocked, lockAccount, ownedTeams, requireActiveAccount, retireAccount } from "./account-retirement";
+import { cliGrants, syncGrants, workspaceAliases, workspaceInvites, workspaceMembers, workspaces } from "./schema";
 
 type WorkspaceUser = { workspaceId: string; userId: string };
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
@@ -36,11 +37,11 @@ function workspaceRole(userId: string) {
 }
 
 export function workspaceAccessibleTo(userId: string) {
-  return sql`(${workspaces.ownerId} = ${userId} or ${memberRole(userId)} is not null)`;
+  return and(accountActive(userId), sql`(${workspaces.ownerId} = ${userId} or ${memberRole(userId)} is not null)`);
 }
 
 export function workspaceManagedBy(userId: string) {
-  return sql`(${workspaces.ownerId} = ${userId} or ${memberRole(userId)} = 'admin')`;
+  return and(accountActive(userId), sql`(${workspaces.ownerId} = ${userId} or ${memberRole(userId)} = 'admin')`);
 }
 
 export async function lockWorkspace(
@@ -50,6 +51,7 @@ export async function lockWorkspace(
   const [workspace] = await transaction.select({ ...workspaceAccessFields, ownerId: workspaces.ownerId })
     .from(workspaces).where(eq(workspaces.id, workspaceId)).for("no key update");
   if (!workspace) return;
+  if (await directoryIsBlocked(transaction, userId)) return;
   if (workspace.ownerId === userId) return { ...workspace, role: "owner" };
   if (workspace.kind !== "team") return;
   const [member] = await transaction.select({ role: workspaceMembers.role })
@@ -82,25 +84,48 @@ export function createWorkspaceStore(databaseUrl: string) {
 
   return {
     async ensurePersonal(ownerId: string) {
-      const [createdWorkspace] = await db.insert(workspaces)
-        .values({ ownerId })
-        .onConflictDoNothing({ target: workspaces.ownerId, where: personalWorkspace })
-        .returning(workspaceFields);
+      return db.transaction(async (transaction) => {
+        await requireActiveAccount(transaction, ownerId);
+        const [createdWorkspace] = await transaction.insert(workspaces)
+          .values({ ownerId })
+          .onConflictDoNothing({ target: workspaces.ownerId, where: personalWorkspace })
+          .returning(workspaceFields);
 
-      if (createdWorkspace) return createdWorkspace;
+        if (createdWorkspace) return createdWorkspace;
 
-      const [existingWorkspace] = await db.select(workspaceFields).from(workspaces)
-        .where(and(eq(workspaces.ownerId, ownerId), personalWorkspace));
+        const [existingWorkspace] = await transaction.select(workspaceFields).from(workspaces)
+          .where(and(eq(workspaces.ownerId, ownerId), personalWorkspace));
 
-      if (!existingWorkspace) throw new Error("Could not find the owner's workspace.");
-      return existingWorkspace;
+        if (!existingWorkspace) throw new Error("Could not find the owner's workspace.");
+        return existingWorkspace;
+      });
     },
 
     async createTeam(userId: string, name: string): Promise<WorkspaceAccess> {
-      const [workspace] = await db.insert(workspaces)
-        .values({ ownerId: userId, name, kind: "team" })
-        .returning(workspaceAccessFields);
-      return { ...workspace, role: "owner" };
+      return db.transaction(async (transaction) => {
+        await requireActiveAccount(transaction, userId);
+        const [workspace] = await transaction.insert(workspaces)
+          .values({ ownerId: userId, name, kind: "team" })
+          .returning(workspaceAccessFields);
+        return { ...workspace, role: "owner" };
+      });
+    },
+
+    accountIsRetiring(userId: string) {
+      return accountIsRetiring(db, userId);
+    },
+
+    directoryIsBlocked(userId: string) {
+      return directoryIsBlocked(db, userId);
+    },
+
+    async accountDeletionStatus(userId: string) {
+      const [retiring, teams] = await Promise.all([accountIsRetiring(db, userId), ownedTeams(db, userId)]);
+      return { retiring, ownedTeams: teams };
+    },
+
+    retireAccount(userId: string) {
+      return db.transaction((transaction) => retireAccount(transaction, userId));
     },
 
     async listAccessible(userId: string): Promise<WorkspaceAccess[]> {
@@ -115,6 +140,32 @@ export function createWorkspaceStore(databaseUrl: string) {
       return workspace;
     },
 
+    async readAddress(userId: string, key: { id: string } | { alias: string }): Promise<WorkspaceAddress | undefined> {
+      const requested = "id" in key ? eq(workspaces.id, key.id) : sql`exists (
+        select 1 from ${workspaceAliases} where ${workspaceAliases.workspaceId} = ${workspaces.id} and ${workspaceAliases.alias} = ${key.alias}
+      )`;
+      const [address] = await db.select({ id: workspaces.id, alias: sql<string | null>`(
+        select ${workspaceAliases.alias} from ${workspaceAliases} where ${workspaceAliases.workspaceId} = ${workspaces.id} and ${workspaceAliases.current}
+      )` }).from(workspaces).where(and(requested, workspaceAccessibleTo(userId)));
+      return address;
+    },
+
+    async setAlias(access: WorkspaceUser, alias: string): Promise<"saved" | "unavailable" | "conflict"> {
+      return db.transaction(async (transaction) => {
+        const workspace = await lockWorkspace(transaction, access);
+        if (workspace?.role !== "owner") return "unavailable";
+        await transaction.insert(workspaceAliases).values({ alias, workspaceId: workspace.id }).onConflictDoNothing();
+        const [claimed] = await transaction.select({ workspaceId: workspaceAliases.workspaceId, current: workspaceAliases.current })
+          .from(workspaceAliases).where(eq(workspaceAliases.alias, alias));
+        if (claimed?.workspaceId !== workspace.id) return "conflict";
+        if (claimed.current) return "saved";
+        await transaction.update(workspaceAliases).set({ current: false })
+          .where(and(eq(workspaceAliases.workspaceId, workspace.id), eq(workspaceAliases.current, true)));
+        await transaction.update(workspaceAliases).set({ current: true }).where(eq(workspaceAliases.alias, alias));
+        return "saved";
+      });
+    },
+
     async renameManaged(access: WorkspaceUser, name: string): Promise<WorkspaceAccess | undefined> {
       return db.transaction(async (transaction) => {
         const workspace = await lockWorkspace(transaction, access);
@@ -122,6 +173,18 @@ export function createWorkspaceStore(databaseUrl: string) {
         const [updated] = await transaction.update(workspaces).set({ name })
           .where(eq(workspaces.id, access.workspaceId)).returning(workspaceAccessFields);
         return { ...updated, role: workspace.role };
+      });
+    },
+
+    async deleteOwned({ workspaceId, userId }: WorkspaceUser, confirmedName: string): Promise<"deleted" | "unavailable" | "name-mismatch"> {
+      return db.transaction(async (transaction) => {
+        const scope = and(eq(workspaces.id, workspaceId), eq(workspaces.ownerId, userId));
+        const [workspace] = await transaction.select({ name: workspaces.name }).from(workspaces).where(scope).for("no key update");
+        if (!workspace) return "unavailable";
+        if (workspace.name !== confirmedName) return "name-mismatch";
+
+        await deleteWorkspaceData(transaction, workspaceId);
+        return "deleted";
       });
     },
 
@@ -149,7 +212,8 @@ export function createWorkspaceStore(databaseUrl: string) {
           .where(and(eq(workspaces.id, workspaceId), eq(workspaces.kind, "team"), workspaceAccessibleTo(userId)));
         if (!workspace) return;
         const managesMembers = isWorkspaceManager(workspace.role);
-        const members = await transaction.select({ userId: workspaceMembers.userId, email: workspaceMembers.email, role: workspaceMembers.role })
+        const members = await transaction.select({ userId: workspaceMembers.userId, email: workspaceMembers.email, role: workspaceMembers.role,
+          directoryManaged: sql<boolean>`${workspaceMembers.directoryObservedAt} is not null` })
           .from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, workspaceId), isNull(workspaceMembers.removedAt)))
           .orderBy(asc(workspaceMembers.role), asc(workspaceMembers.email));
         const invites = managesMembers ? await transaction.select(inviteFields).from(workspaceInvites)
@@ -194,6 +258,8 @@ export function createWorkspaceStore(databaseUrl: string) {
 
     async acceptInvite({ userId, tokenHash, verifiedEmails }: { userId: string; tokenHash: string; verifiedEmails: string[] }): Promise<WorkspaceAccess | undefined> {
       return db.transaction(async (transaction) => {
+        await lockAccount(transaction, userId);
+        if (await accountIsRetiring(transaction, userId)) return;
         const [match] = await transaction.select({ workspaceId: workspaceInvites.workspaceId }).from(workspaceInvites)
           .where(eq(workspaceInvites.tokenHash, tokenHash));
         if (!match) return;
@@ -217,7 +283,7 @@ export function createWorkspaceStore(databaseUrl: string) {
             .values({ workspaceId: id, userId, email: invite.email, role: invite.role })
             .onConflictDoUpdate({
               target: [workspaceMembers.workspaceId, workspaceMembers.userId],
-              set: { email: invite.email, role: invite.role, removedAt: null },
+              set: { email: invite.email, role: invite.role, removedAt: null, directoryObservedAt: null },
               setWhere: sql`${workspaceMembers.removedAt} < (
                 select ${workspaceInvites.createdAt} from ${workspaceInvites} where ${workspaceInvites.id} = ${invite.id}
               )`,
@@ -234,7 +300,7 @@ export function createWorkspaceStore(databaseUrl: string) {
         const workspace = await lockWorkspace(transaction, access);
         if (workspace?.kind !== "team" || workspace.role !== "owner" || member.userId === workspace.ownerId) return false;
         const [updated] = await transaction.update(workspaceMembers).set({ role: member.role })
-          .where(and(membershipScope({ workspaceId: access.workspaceId, userId: member.userId }), isNull(workspaceMembers.removedAt)))
+          .where(and(membershipScope({ workspaceId: access.workspaceId, userId: member.userId }), isNull(workspaceMembers.removedAt), isNull(workspaceMembers.directoryObservedAt)))
           .returning({ userId: workspaceMembers.userId });
         return Boolean(updated);
       });
@@ -248,11 +314,12 @@ export function createWorkspaceStore(databaseUrl: string) {
           .where(and(
             membershipScope({ workspaceId: access.workspaceId, userId: memberUserId }),
             isNull(workspaceMembers.removedAt),
+            isNull(workspaceMembers.directoryObservedAt),
             workspace.role === "owner" ? undefined : eq(workspaceMembers.role, "member"),
           ))
           .returning({ email: workspaceMembers.email });
         if (!removed) return false;
-        await transaction.update(workspaceInvites).set({ revokedAt: sql`clock_timestamp()` })
+        if (removed.email) await transaction.update(workspaceInvites).set({ revokedAt: sql`clock_timestamp()` })
           .where(and(
             eq(workspaceInvites.workspaceId, access.workspaceId), eq(workspaceInvites.email, removed.email), pendingInvite(),
             workspace.role === "owner" ? undefined : eq(workspaceInvites.role, "member"),
@@ -278,7 +345,14 @@ export function createWorkspaceStore(databaseUrl: string) {
     },
 
     async enrollCli(tokenHash: string, workspaceId: string, expiresAt: Date) {
-      await db.insert(cliGrants).values({ tokenHash, workspaceId, expiresAt });
+      return db.transaction(async (transaction) => {
+        const [workspace] = await transaction.select({ ownerId: workspaces.ownerId }).from(workspaces).where(eq(workspaces.id, workspaceId));
+        if (!workspace) return false;
+        await lockAccount(transaction, workspace.ownerId);
+        if (await accountIsRetiring(transaction, workspace.ownerId) || await directoryIsBlocked(transaction, workspace.ownerId)) return false;
+        await transaction.insert(cliGrants).values({ tokenHash, workspaceId, expiresAt });
+        return true;
+      });
     },
 
     async findCliAccount(tokenHash: string): Promise<CliAccount | undefined> {
@@ -286,7 +360,7 @@ export function createWorkspaceStore(databaseUrl: string) {
         .from(cliGrants)
         .innerJoin(workspaces, eq(cliGrants.workspaceId, workspaces.id))
         .where(and(eq(cliGrants.tokenHash, tokenHash), isNull(cliGrants.revokedAt), gt(cliGrants.expiresAt, sql`clock_timestamp()`)));
-      return account;
+      return account && !await accountIsRetiring(db, account.userId) && !await directoryIsBlocked(db, account.userId) ? account : undefined;
     },
 
     async revokeCli(tokenHash: string) {

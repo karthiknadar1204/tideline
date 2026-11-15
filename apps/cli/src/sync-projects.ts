@@ -46,7 +46,7 @@ function totalDiscoveredSessions(sessions: Map<SessionSource, Set<string>>) {
   return [...sessions.values()].reduce((total, ids) => total + ids.size, 0);
 }
 
-async function* discoverSessions(roots: AgentRoots, warn: (message: string) => void) {
+export async function* discoverSessions(roots: AgentRoots, warn: (message: string) => void) {
   for (const { root, depth, source, discover } of fileSources(roots)) {
     if (!root || await realpath(root).catch(() => undefined) !== root) continue;
     let skipped = false;
@@ -113,8 +113,11 @@ export async function chooseProjects(
   previous: ApprovedProject[],
   options: {
     workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean;
+    fullTranscripts?: boolean;
     sessionDetails?: boolean; previousSessionDetails?: boolean;
+    subagentTranscripts?: boolean; previousSubagentTranscripts?: boolean;
     onDiscovered?: (repositoriesFound: number, localSessionsFound: number) => Promise<void>;
+    received?: ReadonlySet<string>;
   },
 ) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -162,10 +165,14 @@ export async function chooseProjects(
     const { name, checkouts } = repository;
     const sessions = sessionCounts(repository);
     const count = totalDiscoveredSessions(sessions);
+    const uploaded = [...sessions].reduce((total, [source, ids]) => {
+      for (const id of ids) if (options.received?.has(`${source}:${id}`)) total++;
+      return total;
+    }, 0);
     const active = [...checkouts.values()].every(wasActive);
     return {
       value: index,
-      label: `${terminalText(name)} · ${count} ${count === 1 ? "local session" : "local sessions"}${active ? " · Sync on" : ""}`,
+      label: `${terminalText(name)} · ${count} local · ${uploaded} sent here · Sync ${active ? "on" : "off"}`,
       hint: terminalText([
         ...[...sessions].map(([source, ids]) => `${ids.size} ${sessionSourceLabel[source]}`),
         ...(checkouts.size > 1 ? [`${checkouts.size} checkouts`] : [[...checkouts.keys()][0]]),
@@ -178,6 +185,7 @@ export async function chooseProjects(
   let historyDefault = false;
   let backgroundDefault = true;
   let detailsDefault = options.previousSessionDetails ?? false;
+  let subagentsDefault = options.previousSubagentTranscripts ?? false;
 
   for (;;) {
     const choices = await autocompleteMultiselect({
@@ -194,7 +202,8 @@ export async function chooseProjects(
     if (!projects.length) {
       const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
       if (isCancel(approve) || !approve) return;
-      return { projects, history: false, background: false, sessionDetails: options.sessionDetails ?? detailsDefault };
+      return { projects, history: false, background: false, sessionDetails: options.sessionDetails ?? detailsDefault,
+        subagentTranscripts: options.subagentTranscripts ?? subagentsDefault };
     }
     if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
       log.info("Projects already approved for older sessions keep that approval.");
@@ -210,6 +219,10 @@ export async function chooseProjects(
       initialValue: detailsDefault,
     });
     if (isCancel(sessionDetails)) return;
+    const subagentTranscripts = sessionDetails && (options.subagentTranscripts ?? await confirm({
+      message: "Also upload redacted conversations from Codex and Claude Code subagents?", initialValue: subagentsDefault,
+    }));
+    if (isCancel(subagentTranscripts)) return;
 
     if (options.onboarding) {
       const checkoutLabel = projects.length === 1 ? "folder" : "folders";
@@ -224,12 +237,14 @@ export async function chooseProjects(
     const destination = options.onDiscovered ? "the workspace open in your browser"
       : options.workspace ? `workspace ${options.workspace}` : "your private workspace";
     log.info(`Tideline uploads conversation text and available metadata from these folders to ${destination}. Common credentials in messages are redacted.`);
+    if (options.fullTranscripts) log.info("Full transcripts add redacted source records and recorded images from Codex and Claude Code.");
     if (sessionDetails) log.info("Session details can include source code and command output. Workspace members can read them.");
+    if (subagentTranscripts) log.info("Workspace members can read captured subagent conversations.");
 
     if (!options.onboarding) {
       const approved = await confirm({ message: "Approve this selection?", initialValue: false });
       if (isCancel(approved) || !approved) return;
-      return { projects, history, background, sessionDetails };
+      return { projects, history, background, sessionDetails, subagentTranscripts };
     }
 
     const action = await select({
@@ -242,11 +257,12 @@ export async function chooseProjects(
       ],
     });
     if (isCancel(action) || action === "cancel") return;
-    if (action === "confirm") return { projects, history, background, sessionDetails };
+    if (action === "confirm") return { projects, history, background, sessionDetails, subagentTranscripts };
     initialValues = choices;
     historyDefault = history;
     backgroundDefault = background;
     detailsDefault = sessionDetails;
+    subagentsDefault = subagentTranscripts;
   }
 }
 

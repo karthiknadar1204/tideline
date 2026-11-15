@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
 import type {
-  CliSessionListQuery, SessionActivity, SessionCapture, SessionImportRequest, SessionSummary,
+  CliSessionListQuery, RepositoryEvidenceQuery, RepositoryInstructionUpload, SessionActivity, SessionCapture, SessionImportRequest, SessionSummary, SyncInventoryUpdate,
   WorkspaceActivityKind, WorkspaceActivityQuery, WorkspaceSessionSearchQuery,
 } from "@tideline/contracts";
 import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
@@ -9,9 +9,16 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { alias } from "drizzle-orm/pg-core";
-import { agentSessions, syncGrants, workspaces } from "./schema";
+import { lockAccount } from "./account-retirement";
+import { agentSessions, repositoryInstructions, sessionShares, syncGrants, syncInventories, transcriptAttachments, transcriptRecords, workspaceMembers, workspaces } from "./schema";
+import { readRepositoryFiles, readRepositoryInstructions } from "./repository-evidence";
+import { sessionReportedFrustration } from "./session-frustration";
+import { mergeSessionCapture } from "./session-subagents";
+import { advancedSessionSearch, recordedToolFailure, sessionActivityRows, sessionModels } from "./session-search";
+import { mergeRepositorySettings, readRepositorySyncStatus, readSyncCoverage } from "./sync-inventory";
 import { readWorkspaceActivity } from "./workspace-activity";
-import { workspaceAccessibleTo } from "./workspaces";
+import { activeSyncGrant } from "./sync-grant";
+import { workspaceAccessibleTo, workspaceManagedBy } from "./workspaces";
 
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
 type Messages = SessionImportRequest["session"]["events"];
@@ -41,10 +48,6 @@ function withKnownMcpServers(activity: SessionActivity, known: SessionActivity):
       return mcpServer && !tool.mcpServer ? { ...tool, mcpServer } : tool;
     }),
   };
-}
-
-function activeSyncGrant(tokenHash: string) {
-  return and(eq(syncGrants.tokenHash, tokenHash), isNull(syncGrants.revokedAt), gt(syncGrants.expiresAt, sql`clock_timestamp()`));
 }
 
 async function lockAccessibleWorkspace(transaction: Transaction, workspaceId: string, userId: string) {
@@ -81,6 +84,7 @@ async function receiveSession(
   const [existing] = await transaction.select({
     id: agentSessions.id,
     uploadedBy: agentSessions.uploadedBy,
+    deletedAt: agentSessions.deletedAt,
     startedAt: agentSessions.startedAt,
     messages: agentSessions.messages,
     analytics: agentSessions.pendingAnalytics,
@@ -96,6 +100,7 @@ async function receiveSession(
   if (!existing) {
     throw new Error("Import record disappeared before it could be checked.");
   }
+  if (existing.deletedAt) return { id: existing.id, alreadyReceived: true };
   if (existing.uploadedBy !== uploadedBy) return null;
 
   const priorMessages = source === "codex" && activity && !existing.activity
@@ -154,9 +159,8 @@ async function receiveSession(
     };
     if (!isDeepStrictEqual(existing.review, next)) reviewUpdate = next;
   }
-  const previousCaptureLine = existing.capture?.throughLine ?? 0;
-  if (capture?.throughLine === previousCaptureLine && !isDeepStrictEqual(existing.capture, capture)) return null;
-  const captureUpdate = capture && capture.throughLine > previousCaptureLine ? capture : undefined;
+  const captureUpdate = mergeSessionCapture(existing.capture, capture);
+  if (captureUpdate === null) return null;
   if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate && !reviewUpdate && !captureUpdate) return replay;
 
   await transaction.update(agentSessions)
@@ -210,6 +214,7 @@ export function createSessionStore(databaseUrl: string) {
       expiresAt: Date;
     }) {
       return db.transaction(async (transaction) => {
+        await lockAccount(transaction, userId);
         if (!await lockAccessibleWorkspace(transaction, workspaceId, userId)) return false;
         await transaction.insert(syncGrants).values({ tokenHash, workspaceId, userId, expiresAt });
         return true;
@@ -217,12 +222,43 @@ export function createSessionStore(databaseUrl: string) {
     },
 
     async revokeSync(tokenHash: string) {
-      const [grant] = await db.update(syncGrants)
-        .set({ revokedAt: sql`coalesce(${syncGrants.revokedAt}, now())` })
-        .where(eq(syncGrants.tokenHash, tokenHash))
-        .returning({ workspaceId: syncGrants.workspaceId });
+      return db.transaction(async (transaction) => {
+        const [grant] = await transaction.update(syncGrants)
+          .set({ revokedAt: sql`coalesce(${syncGrants.revokedAt}, now())` })
+          .where(eq(syncGrants.tokenHash, tokenHash))
+          .returning({ workspaceId: syncGrants.workspaceId });
+        if (!grant) return false;
+        await transaction.delete(syncInventories).where(eq(syncInventories.grantHash, tokenHash));
+        return true;
+      });
+    },
 
-      return Boolean(grant);
+    coverage(workspaceId: string, userId: string) {
+      return readSyncCoverage(db, workspaceId, userId);
+    },
+
+    repositorySyncStatus(workspaceId: string, userId: string, query?: string) {
+      return readRepositorySyncStatus(db, workspaceId, userId, query);
+    },
+
+    async updateInventory(tokenHash: string, update: SyncInventoryUpdate) {
+      return db.transaction(async (transaction) => {
+        const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId })
+          .from(syncGrants).where(activeSyncGrant(tokenHash)).for("update");
+        if (!grant) return "unauthorized";
+        if (grant.workspaceId !== update.workspaceId.toLowerCase()) return "foreign-workspace";
+        if ("clear" in update) {
+          await transaction.delete(syncInventories).where(eq(syncInventories.grantHash, tokenHash));
+        } else {
+          const [previous] = await transaction.select({ report: syncInventories.report }).from(syncInventories)
+            .where(eq(syncInventories.grantHash, tokenHash));
+          const report = mergeRepositorySettings(update, previous?.report);
+          await transaction.insert(syncInventories).values({ grantHash: tokenHash, workspaceId: grant.workspaceId, report })
+            .onConflictDoUpdate({ target: syncInventories.grantHash, set: { report, updatedAt: sql`clock_timestamp()` } });
+        }
+        await transaction.delete(syncInventories).where(sql`${syncInventories.updatedAt} < clock_timestamp() - interval '90 days'`);
+        return "accepted";
+      });
     },
 
     async readSyncGrant(tokenHash: string) {
@@ -263,17 +299,101 @@ export function createSessionStore(databaseUrl: string) {
       return readWorkspaceActivity(db, access, kind, filters);
     },
 
+    repositoryFiles(access: Parameters<typeof readRepositoryFiles>[1], filters: RepositoryEvidenceQuery) {
+      return readRepositoryFiles(db, access, filters);
+    },
+
+    repositoryInstructions(access: Parameters<typeof readRepositoryInstructions>[1]) {
+      return readRepositoryInstructions(db, access);
+    },
+
+    async receiveRepositoryInstructions(tokenHash: string, { workspaceId: inputWorkspace, repository, snapshot, contextOnly }: RepositoryInstructionUpload) {
+      return db.transaction(async (transaction) => {
+        const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId, userId: syncGrants.userId })
+          .from(syncGrants).where(activeSyncGrant(tokenHash)).for("update");
+        if (!grant?.userId) return "unauthorized";
+        if (grant.workspaceId !== inputWorkspace.toLowerCase()) return "foreign-workspace";
+
+        const [existing] = await transaction.select({ id: agentSessions.id }).from(agentSessions).where(and(
+          eq(agentSessions.workspaceId, grant.workspaceId),
+          sql`coalesce(${agentSessions.readyAnalytics}, ${agentSessions.pendingAnalytics})->'repository'->>'key' = ${repository}`,
+        )).limit(1);
+        if (!existing) return "unknown-repository";
+
+        const stored = repositoryInstructions.snapshot;
+        const merged = contextOnly ? sql`jsonb_set(${stored}, '{context}', excluded.snapshot -> 'context')` : snapshot.context ? sql`excluded.snapshot` : sql`
+          case when ${stored} ? 'context' then jsonb_set(excluded.snapshot, '{context}', ${stored} -> 'context') else excluded.snapshot end`;
+        await transaction.insert(repositoryInstructions).values({ workspaceId: grant.workspaceId, repositoryKey: repository, snapshot })
+          .onConflictDoUpdate({
+            target: [repositoryInstructions.workspaceId, repositoryInstructions.repositoryKey],
+            set: { snapshot: merged, observedAt: sql`clock_timestamp()` },
+            setWhere: sql`${stored} is distinct from (${merged})`,
+          });
+        return "accepted";
+      });
+    },
+
     async listReady(workspaceId: string) {
       return db.select({ ...summaryFields, activityCounts }).from(agentSessions)
         .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0)))
         .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id));
     },
 
-    async searchReady(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
+    async listReadyForDigest(workspaceId: string, { from, to }: { from: string; to: string }) {
+      const day = sql`left(${agentSessions.startedAt}, 10)`;
+      return db.select({ ...summaryFields, activityCounts, recordedToolFailure }).from(agentSessions)
+        .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0), gte(day, from), lte(day, to)))
+        .orderBy(desc(agentSessions.startedAt), desc(agentSessions.id));
+    },
+
+    async listReadyForTrends({ workspaceId, userId }: { workspaceId: string; userId: string }, { from, to }: { from: string; to: string }) {
+      return db.transaction(async (transaction) => {
+        const [accessible] = await transaction.select({ id: workspaces.id }).from(workspaces)
+          .where(and(eq(workspaces.id, workspaceId), workspaceAccessibleTo(userId)));
+        if (!accessible) return;
+        const day = sql`left(${agentSessions.startedAt}, 10)`;
+        return transaction.select({ ...summaryFields, activityCounts, recordedToolFailure, reportedFrustration: sessionReportedFrustration })
+          .from(agentSessions)
+          .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0), gte(day, from), lte(day, to)))
+          .orderBy(desc(agentSessions.startedAt), desc(agentSessions.id));
+      }, { isolationLevel: "repeatable read", accessMode: "read only" });
+    },
+
+    async listReadyWithInsights(workspaceId: string, userId: string) {
+      const rows = await db.select({
+        ...summaryFields,
+        activityCounts,
+        reportedFrustration: sessionReportedFrustration,
+        activeMemberId: sql<string | null>`case
+          when ${workspaces.kind} = 'team' and ${agentSessions.uploadedBy} = ${workspaces.ownerId} then ${workspaces.ownerId}
+          when ${workspaceMembers.removedAt} is null then ${workspaceMembers.userId}
+          else null end`,
+        formerMember: sql<boolean>`${workspaceMembers.removedAt} is not null`,
+      }).from(agentSessions)
+        .innerJoin(workspaces, eq(agentSessions.workspaceId, workspaces.id))
+        .leftJoin(workspaceMembers, and(
+          eq(workspaces.kind, "team"),
+          eq(workspaceMembers.workspaceId, agentSessions.workspaceId),
+          eq(workspaceMembers.userId, agentSessions.uploadedBy),
+        ))
+        .where(and(
+          eq(workspaces.id, workspaceId),
+          workspaceAccessibleTo(userId),
+          gt(agentSessions.readyMessageCount, 0),
+        ))
+        .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id));
+
+      return rows.map(({ activeMemberId, formerMember, ...summary }) => ({
+        ...summary,
+        member: activeMemberId ? { kind: "active" as const, id: activeMemberId }
+          : { kind: formerMember ? "former" as const : "unknown" as const },
+      }));
+    },
+
+    async searchReady(workspaceId: string, filters: WorkspaceSessionSearchQuery, { includeActivityFacets = false } = {}) {
       const ready = and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0));
       const repositoryKey = sql<string>`${agentSessions.readyAnalytics} -> 'repository' ->> 'key'`;
       const repositoryName = sql<string>`${agentSessions.readyAnalytics} -> 'repository' ->> 'name'`;
-      const models = sql`jsonb_array_elements(${agentSessions.readyAnalytics} -> 'models')`;
       const availableModel = sql<string>`available_models.value ->> 'model'`;
       const sessionDay = sql`left(${agentSessions.startedAt}, 10)`;
       const matches = and(
@@ -281,30 +401,28 @@ export function createSessionStore(databaseUrl: string) {
         filters.source === undefined ? undefined : eq(agentSessions.source, filters.source),
         filters.repository === undefined ? undefined : eq(repositoryKey, filters.repository),
         filters.model === undefined ? undefined : sql`exists (
-          select 1 from ${models} as filter_models(value) where filter_models.value ->> 'model' = ${filters.model}
+          select 1 from ${sessionModels} as filter_models(value) where filter_models.value ->> 'model' = ${filters.model}
         )`,
         filters.from === undefined ? undefined : gte(sessionDay, filters.from),
         filters.to === undefined ? undefined : lte(sessionDay, filters.to),
-        filters.query === undefined ? undefined : sql`(
-          strpos(lower(${agentSessions.title}), lower(${filters.query})) > 0
-          or exists (
-            select 1 from jsonb_array_elements(${agentSessions.messages}) with ordinality as entry(message, position)
-            where entry.position <= ${agentSessions.readyMessageCount}
-              and entry.message ->> 'role' in ('user', 'assistant')
-              and strpos(lower(entry.message ->> 'text'), lower(${filters.query})) > 0
-          )
-        )`,
+        advancedSessionSearch(filters),
       );
 
       return db.transaction(async (transaction) => {
-        const [[totals], repositories, modelRows] = await Promise.all([
+        const activityName = sql<string>`available_activity.value ->> 'name'`;
+        const activityNames = (kind: "skills" | "children") => transaction.selectDistinct({ name: activityName }).from(agentSessions)
+          .crossJoinLateral(sql`${sessionActivityRows(kind)} as available_activity(value)`)
+          .where(and(ready, isNotNull(activityName))).orderBy(asc(activityName)).limit(250);
+        const [[totals], repositories, modelRows, skills, subagents] = await Promise.all([
           transaction.select({ total: count() }).from(agentSessions).where(matches),
           transaction.select({ key: repositoryKey, name: sql<string>`min(${repositoryName})` }).from(agentSessions)
             .where(and(ready, isNotNull(repositoryKey), isNotNull(repositoryName)))
             .groupBy(repositoryKey).orderBy(asc(sql`min(${repositoryName})`), asc(repositoryKey)),
           transaction.selectDistinct({ model: availableModel }).from(agentSessions)
-            .crossJoinLateral(sql`${models} as available_models(value)`)
+            .crossJoinLateral(sql`${sessionModels} as available_models(value)`)
             .where(and(ready, isNotNull(availableModel))).orderBy(asc(availableModel)),
+          includeActivityFacets ? activityNames("skills") : [],
+          includeActivityFacets ? activityNames("children") : [],
         ]);
         const total = totals.total;
         const page = Math.min(filters.page, Math.max(1, Math.ceil(total / WORKSPACE_SESSION_PAGE_SIZE)));
@@ -314,7 +432,10 @@ export function createSessionStore(databaseUrl: string) {
         const sessions = total ? await transaction.select({ ...summaryFields, activityCounts }).from(agentSessions).where(matches)
           .orderBy(...order)
           .limit(WORKSPACE_SESSION_PAGE_SIZE).offset((page - 1) * WORKSPACE_SESSION_PAGE_SIZE) : [];
-        return { sessions, total, page, repositories, models: modelRows.map(({ model }) => model) };
+        return {
+          sessions, total, page, repositories, models: modelRows.map(({ model }) => model),
+          skills: skills.map(({ name }) => name), subagents: subagents.map(({ name }) => name),
+        };
       }, { isolationLevel: "repeatable read", accessMode: "read only" });
     },
 
@@ -363,6 +484,42 @@ export function createSessionStore(databaseUrl: string) {
         review: review && { commits: review.commits, findings: review.findings, truncated: review.truncated },
         messages: messages.slice(0, session.messageCount),
       };
+    },
+
+    async deleteManaged({ workspaceId, sessionId, userId }: { workspaceId: string; sessionId: string; userId: string }) {
+      return db.transaction(async (transaction) => {
+        const scope = and(eq(workspaces.id, workspaceId), workspaceManagedBy(userId));
+        const [locked] = await transaction.select({ id: workspaces.id }).from(workspaces)
+          .where(scope).for("no key update");
+        if (!locked) return false;
+        const [authorized] = await transaction.select({ id: workspaces.id }).from(workspaces).where(scope);
+        if (!authorized) return false;
+
+        // Keep only the identity needed to acknowledge collector retries without recreating the session.
+        const [deleted] = await transaction.update(agentSessions)
+          .set({
+            deletedAt: sql`coalesce(${agentSessions.deletedAt}, now())`,
+            uploadedBy: null,
+            title: null,
+            messages: [],
+            readyMessageCount: 0,
+            pendingAnalytics: null,
+            readyAnalytics: null,
+            pendingActivity: null,
+            readyActivity: null,
+            pendingReview: null,
+            readyReview: null,
+            pendingCapture: null,
+            readyCapture: null,
+          })
+          .where(and(eq(agentSessions.workspaceId, workspaceId), eq(agentSessions.id, sessionId)))
+          .returning({ id: agentSessions.id });
+        if (!deleted) return false;
+        await transaction.delete(sessionShares).where(eq(sessionShares.sessionId, deleted.id));
+        await transaction.delete(transcriptRecords).where(eq(transcriptRecords.sessionId, deleted.id));
+        await transaction.delete(transcriptAttachments).where(eq(transcriptAttachments.sessionId, deleted.id));
+        return true;
+      });
     },
 
     async processNext() {

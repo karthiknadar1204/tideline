@@ -19,7 +19,7 @@ function parseRemote(remote: string | undefined) {
   return { host: host.toLowerCase(), path };
 }
 
-export function createRepositoryGit(directory: string) {
+export function createRepositoryGit(directory: string, { raw = false, maxBuffer = 16_384 } = {}) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
     GIT_NO_LAZY_FETCH: "1",
@@ -28,9 +28,9 @@ export function createRepositoryGit(directory: string) {
   };
   return async (...args: string[]) => {
     const result = await run("git", args, {
-      cwd: directory, env, timeout: 1_500, maxBuffer: 16_384, windowsHide: true,
+      cwd: directory, env, timeout: 1_500, maxBuffer, windowsHide: true,
     }).catch(() => undefined);
-    return result?.stdout.trim();
+    return raw ? result?.stdout : result?.stdout.trim();
   };
 }
 

@@ -1,4 +1,5 @@
 import { createSessionStore } from "@tideline/db/sessions";
+import { createDigestDelivery } from "./digest-delivery";
 
 const databaseUrl = process.env.NEON_DB_URL;
 if (!databaseUrl) {
@@ -6,6 +7,9 @@ if (!databaseUrl) {
 }
 
 const sessions = createSessionStore(databaseUrl);
+const digestDelivery = createDigestDelivery(databaseUrl, sessions);
+let deliveryCheck = 0;
+let delivery = Promise.resolve();
 let stopping = false;
 
 function stop() {
@@ -20,6 +24,12 @@ let working = true;
 
 try {
   while (!stopping) {
+    if (digestDelivery && Date.now() >= deliveryCheck) {
+      deliveryCheck = Infinity;
+      delivery = digestDelivery.run().catch((error: unknown) => {
+        console.error("Tideline could not check scheduled digest delivery.", { error: error instanceof Error ? error.name : "UnknownError" });
+      }).finally(() => { deliveryCheck = Date.now() + 60_000; });
+    }
     try {
       const processed = await sessions.processNext();
       if (!working) {
@@ -40,5 +50,7 @@ try {
     await Bun.sleep(1_000);
   }
 } finally {
+  await delivery;
+  await digestDelivery?.close();
   await sessions.close();
 }

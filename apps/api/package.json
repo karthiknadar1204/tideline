@@ -13,8 +13,9 @@
     "@clerk/backend": "3.29.0",
     "@clerk/shared": "4.45.1",
     "@tideline/contracts": "workspace:*",
+    "@tideline/db": "workspace:*",
     "hono": "4.13.18",
-    "@tideline/db": "workspace:*"
+    "stripe": "23.1.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.4"

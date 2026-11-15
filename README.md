@@ -21,6 +21,8 @@ Open [Tideline](http://localhost:3000) and sign in to open your personal workspa
 
 Set `TIDELINE_WEB_ORIGIN` in the web app to that same origin. The web build bundles the CLI and serves it with `/install.sh`. If the CLI needs a different API URL from the web server, set `TIDELINE_PUBLIC_API_URL` in the web app.
 
+In Clerk's **User & authentication → User model** settings, turn off Clerk's self-service account deletion for the instance. Use **Settings → Account** in Tideline to delete an account so Tideline removes its data and access before deleting its Clerk identity. [Clerk user permissions](https://clerk.com/docs/guides/configure/auth-strategies/sign-up-sign-in-options#user-model)
+
 ## Sync your first session
 
 Copy the install command from the landing page or your workspace. It installs the CLI under `~/.local` and opens repository selection. Add `~/.local/bin` to your `PATH` to run `tideline` directly. To use a different location, set `TIDELINE_INSTALL_PREFIX` to an absolute path in the installer’s shell environment.
@@ -62,7 +64,7 @@ The importer accepts a single Codex or Claude Code JSONL file up to 1 MiB. It se
 
 ## Choose repositories and sync
 
-Run setup from the Tideline checkout. The picker finds repositories and folders in local agent history. Type to search and use the arrow keys and Tab to select. Each entry shows how many saved sessions Tideline found. Related Git worktrees are grouped, and the review lists the exact folders you are approving.
+Run setup from the Tideline checkout. The picker finds repositories and folders in local agent history. Type to search and use the arrow keys and Tab to select. Each entry shows how many local sessions Tideline found, how many this collector sent to the selected workspace, and whether sync is on. Related Git worktrees are grouped, and the review lists the exact folders you are approving.
 
 ```sh
 bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sync setup
@@ -72,9 +74,23 @@ Choose whether to include older sessions and whether to sync in the background. 
 
 You can also open the picker with `upload`, `connect`, `enable`, or `disable`. To pause every repository, clear the selection and confirm. Use `sync retry` or `upload --retry` to resend queued uploads and recover failed ones from approved local sessions. An active collector picks up the request. When sync is stopped, the command attempts the retry directly. Use `sync status` to see what still needs attention.
 
-To select paths without the picker, pass `--project /path/to/first /path/to/second --conversations`. Add `--history` to import older sessions and `--background` to start sync immediately. Use `sync start` and `sync stop` to control the background collector. It stays running after the terminal closes. Run `sync start` again after a reboot or if the process exits. Use `sync run` to watch in the current terminal, `sync status` to check upload counts, or `sync revoke` to end this collector’s authorization.
+`upload <file>` uses the same options and approval as `import <file>`.
 
-Tideline checks local session files and databases about every two seconds. The dashboard refreshes its recent sessions every five seconds and shows each session’s original date. The local queue catches up after reconnecting or restarting. Each upload is limited to 1 MiB and 500 messages. Discovery counts can include sessions that exceed these limits or lack enough data to import. The collector sends conversation text and available metadata. Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Tideline redacts common credential patterns in messages.
+Run `tideline sync once` with background sync stopped to scan the current selection, upload new or changed sessions, and exit.
+
+To select paths without the picker, pass `--project /path/to/first /path/to/second --conversations`. Add `--history` to import older sessions and `--background` to start sync immediately. Use `sync start` and `sync stop` to control the background collector. Run `tideline sync autostart enable` from an installed CLI to start sync at login on macOS or Linux with systemd. Run `tideline sync autostart status` to check it and `tideline sync autostart disable` to remove it. Use `sync run` to watch in the terminal, `sync status` to check upload counts, or `sync revoke` to end this collector’s authorization.
+
+Tideline checks local session files and databases about every two seconds. The local queue catches up after reconnecting or restarting. An upload can include up to 1 MiB of conversation and metadata, with a limit of 500 messages. Optional session details have a separate 512 KiB limit. Discovery can count sessions that exceed these limits or lack enough data to import.
+
+**Settings → General** shows sync coverage. Collectors send an inventory at startup and every 30 minutes while running. It contains session IDs, agent names, and start times for approved sessions. The workspace compares those IDs with sessions it received. **Settings → Uploads** uses repository names and hashed IDs from the same report to show enabled, paused, and unreported repositories. Set `TIDELINE_SESSION_INVENTORY=0` in the collector environment to turn both reports off. The collector clears its previous report when it next connects. Agents can check coverage through the MCP tool `sync_coverage`.
+
+For Codex and Claude Code, run `tideline sync setup --session-details` to include tool input and output text, recorded file diffs, and selected setup metadata. The collector redacts common credential patterns. Add `--repository-instructions` to sync supported instruction files from selected checkouts. Use `--repository-context` separately to sync redacted skill and agent definitions plus the paths, file sizes, and collector fingerprints of supported configurations and skill resources. **Repositories → Context** shows the latest snapshot.
+
+With session details enabled, use `--subagent-transcripts` to collect bounded excerpts of linked Codex and Claude Code child conversations up to four levels deep. Open the parent session and select **Subagents** to read them.
+
+Run `tideline sync setup --hooks --full-transcripts` to enable two optional features. The hooks wake a running collector after Codex and Claude Code events. Check them with `tideline hooks status` or remove them with `tideline hooks remove`. If Codex requests trust for the new hooks, review the Tideline commands in Codex’s `/hooks` menu. Polling also runs when no hooks are installed.
+
+Full transcripts keep the redacted JSONL source records separately from the conversation summary. They include embedded PNG, JPEG, GIF, and WebP images up to 6 MiB each. Unsupported attachments are marked in the archive. Collection stops at a source record that exceeds the local reader limit or cannot be verified as belonging to the selected checkout. Open **Transcript** to read records and download JSONL or images. Enable both `--session-details` and `--subagent-transcripts` to include separate streams for verified child agents. Run `tideline sync setup --no-full-transcripts` to stop sending new archive data.
 
 The CLI reads Codex sessions under `${CODEX_HOME:-~/.codex}/sessions` and `archived_sessions` in the same home directory. It reads Claude Code sessions under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects`. For Cursor, it reads local IDE SQLite storage under `~/Library/Application Support/Cursor/User` on macOS or `${XDG_CONFIG_HOME:-~/.config}/Cursor/User` on Linux. Use `TIDELINE_CURSOR_USER_DIR` to select a different Cursor User directory. OpenCode uses SQLite under `${XDG_DATA_HOME:-~/.local/share}/opencode`. If OpenCode uses a custom database file, set the same `OPENCODE_DB` when running setup.
 
@@ -96,7 +112,13 @@ bun --env-file=apps/cli/.env.local apps/cli/src/index.ts sql 'SELECT source, cou
 
 `pull` writes one JSONL file per session and a manifest in a private directory. Omit `--out` to use a new directory under the local Tideline `pulls` folder. The export includes conversation text. Use `--in` with `count` or `sql` to read the export offline. Without search text, `count` counts sessions. With text, it counts matching messages by default. Use `--unit session` to count each matching conversation once and `--field user` or `--field assistant` to search one role.
 
-`sql` runs one read-only `SELECT` or `WITH` query in local SQLite. Its tables are `sessions`, `messages`, `models`, `activity`, `commits`, and `safety_findings`. It prints JSONL by default. Use `--out` with a new `.jsonl` or `.csv` file to save results. Scope larger queries with a repository, source, or date range.
+Add `--details` to `pull` or live `sql` to include captured tool text, file changes, and setup. Use `--pattern` on `pull` or `count` for regular expressions. For example, run `tideline count --pattern 'timeout|429' --field tool-output --unit call` to count each matching call once. Regex counts use your most recent default pull when available. Pass `--live` for fresh workspace data or `--in` for a specific export.
+
+Add `--github` to `pull` to save imported pull requests and CI runs with the export. Use `sql --github` for live queries against `github_activity`, or query the table offline with `sql --in` using an export that includes it.
+
+Add `--transcripts` to `pull` to save any archived JSONL and supported embedded images alongside the regular export.
+
+`sql` runs one read-only `SELECT` or `WITH` query in local SQLite. Its tables are `sessions`, `messages`, `models`, `activity`, `commits`, `safety_findings`, `calls`, `prompts`, `agent_runs`, `agent_messages`, `file_changes`, and `session_setup`. It prints JSONL by default. Use `--out` with a new `.jsonl` or `.csv` file to save results. Scope larger queries with a repository, source, or date range.
 
 ## Create a team workspace
 
@@ -112,9 +134,17 @@ As the workspace owner or an admin, open a session and review its conversation. 
 
 ## Find a session
 
-In **Sessions**, search by title or by a phrase from a processed conversation. Filter by agent and repository. Open **More filters** to select a model or a range of UTC start dates. **Back to sessions** returns you to the same results after you read a conversation.
+In **Sessions**, search by title, a phrase from a processed conversation, or its ID. Open **Filters** to narrow results by agent, repository, model, member, skill, subagent type, tool failure, reported frustration, UTC dates, and ranges for tokens, estimated cost, elapsed time, or messages. **Back to sessions** preserves those filters.
 
 ## Run a usage report
+
+From a GitHub checkout, run `tideline github sync` after signing in with `gh auth login` and `tideline login`. The command imports up to 100 recent merged pull requests and 100 recent GitHub Actions runs. Open **Reports → GitHub** to filter and open those records.
+
+Run `tideline sync setup --github-activity` to opt the selected GitHub checkouts into automatic collection. Tideline checks approved origins about every 15 minutes and uploads changed results through the collector's workspace credential. GitHub authentication stays in the local `gh` installation. A changed origin needs a new approval. Run `tideline sync setup --no-github-activity` to stop automatic collection while keeping session sync.
+
+**Reports → Trends** compares two equal, completed UTC periods using synced workspace sessions. Its links open the sessions behind the recorded usage, failures, and frustration counts.
+
+Open **Reports → Weekly** to compare completed UTC weeks, open notable sessions, download Markdown, or save a private report.
 
 Open **Reports** to see session activity, reported tokens, and estimated cost by repository and model. Choose a time period, agent, or repository, then select **Apply**. **Download CSV** exports counts and usage for the chosen filters. Open a session to see its own breakdown. Token totals include reported input, cache reads and writes, and output. Cost estimates apply standard API token rates in USD. Subscription charges, discounts, and special rates can differ. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 
@@ -147,11 +177,35 @@ Each MCP connection serves the workspace specified in its command. To revoke thi
 
 Open a session to see tool calls, reported skill use, and child agent runs. **Returned** means a tool produced a result. A child run can stay **Running** after its launch tool returns. Tideline uses the parent session log and shows the latest status it can confirm. Each session includes up to 250 entries per activity category. Workspace totals show activity from sessions that have synced it.
 
+## Deliver daily and weekly digests
+
+Workspace owners can open **Settings** → **Digests** to enable either schedule and choose up to 25 active recipients for each. Daily digests go out Monday through Friday if the preceding UTC workday has synced sessions. Monday reports cover Friday. Weekly digests cover the most recent completed Monday through Sunday and can go out on any day at a selected UTC hour. Both include usage totals, repository and model names, and notable session titles. Recipients use their current verified primary Clerk email addresses. Opening the report link in Tideline requires workspace access.
+
+To enable delivery, set the worker's `TIDELINE_DIGEST_MAIL_URL` to your HTTPS mail relay, `TIDELINE_DIGEST_MAIL_TOKEN` to the relay's bearer credential, `CLERK_SECRET_KEY` to the Tideline instance's server key, and `TIDELINE_WEB_ORIGIN` to the dashboard origin. Run database migrations before starting the worker. Local HTTP is supported on loopback for testing.
+
+The relay accepts an authenticated `POST` with JSON fields `to`, `subject`, and `markdown`. Return a successful HTTP status once accepted. Honor the `Idempotency-Key` header by returning success on repeated requests without sending another message. The key identifies a workspace, recipient, digest cadence, and reporting period. The worker stores successful deliveries, retries temporary failures, and attempts the current scheduled digest on its next check if the configured time has already passed.
+
+## Connect enterprise identity
+
+Enable Clerk Organizations with optional membership so personal workspaces stay available. Configure the API webhook endpoint at `/v1/webhooks/clerk-directory` and set `CLERK_WEBHOOK_SIGNING_SECRET` in the API environment. Subscribe to `organizationMembership.created`, `organizationMembership.updated`, `organizationMembership.deleted`, `organization.deleted`, `user.updated`, and `user.deleted`.
+
+In a Tideline team, open **Settings → Integrations → Enterprise identity**. The workspace owner must also be an administrator of the selected Clerk organization. Link the organization, then open its **Security** tab to configure SAML single sign-on and SCIM Directory Sync. Enable self-serve SSO and Directory Sync for that organization in Clerk first. Existing manual memberships retain their Tideline roles. [Clerk self-serve SSO](https://clerk.com/docs/guides/configure/auth-strategies/enterprise-connections/self-serve-sso) and [Clerk Directory Sync](https://clerk.com/docs/guides/configure/auth-strategies/enterprise-connections/self-serve-directory-sync).
+
 ## Review commits and safety findings
 
 Open a synced session to see commits reported by a `git commit` tool result and verified against the local repository. Tideline builds commit links for GitHub and GitLab origins. Other repositories show the verified SHA. A link can become reachable when you push the commit to the origin.
 
 The collector looks for specific risky shell commands and possible credentials. The dashboard shows the rule and log line. Findings are advisory. Older sessions show unavailable until the collector sends a review.
+
+## Configure Stripe test billing
+
+The workspace owner can open **Settings** → **Billing** to see subscription status, start Stripe Checkout, or manage a subscription in Stripe’s customer portal.
+
+1. Create the recurring prices in a Stripe sandbox and configure its customer portal. [Stripe customer portal setup](https://docs.stripe.com/customer-management/integrate-customer-portal)
+2. Set `TIDELINE_STRIPE_TEST_SECRET_KEY` to the test secret key and `TIDELINE_STRIPE_PRICE_IDS` to the comma-separated price IDs in the API environment. Apply the database migrations and retain the correct `TIDELINE_WEB_ORIGIN` for return links.
+3. Forward Stripe snapshot webhooks to `/v1/webhooks/stripe` and set `TIDELINE_STRIPE_WEBHOOK_SECRET` from the webhook listener. Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, and `customer.subscription.created`, `updated`, `deleted`, `paused`, and `resumed`. [Stripe webhook testing and signatures](https://docs.stripe.com/webhooks)
+
+Billing runs in Stripe test mode. Tideline reads product names and billing intervals from Stripe, and Stripe displays the configured amount at Checkout.
 
 | Workspace | Current entry point |
 | --- | --- |

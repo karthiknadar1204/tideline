@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { formatCost, formatCount } from "../../../../lib/usage";
 import type { UsageRow } from "../../../../lib/usage";
 import { analyticsHref, analyticsMetrics, analyticsSessionsHref, formatAnalyticsMetric, timelineMetric } from "../../../../lib/workspace-analytics";
-import type { AnalyticsFilters, AnalyticsMetric, buildWorkspaceAnalytics } from "../../../../lib/workspace-analytics";
+import type { AnalyticsFilters, AnalyticsMetric, buildWorkspaceAnalytics, summarizeMemberMetric } from "../../../../lib/workspace-analytics";
 import styles from "./analytics.module.css";
 
 type Report = ReturnType<typeof buildWorkspaceAnalytics>;
@@ -50,8 +50,9 @@ export function AnalyticsSeries({ path, workspaceId, metric, filters, report }: 
       <div className={styles.plotPanel}>
         <div className={styles.sectionHeading}>
           <h2 id="analytics-series">{seriesTitle}</h2>
-          <Link href={analyticsSessionsHref(workspaceId, filters, report.firstDay)}>View sessions <span aria-hidden>→</span></Link>
+          <Link href={analyticsSessionsHref(workspaceId, filters, report.firstDay, { metric })}>View sessions <span aria-hidden>→</span></Link>
         </div>
+        {metric === "frustration" && <p className={styles.coverage}>Share of sessions with phrases such as “this still isn’t working” or “undo your last changes” in a user message.</p>}
         {hasData ? (
           <>
             <div className={styles.plot}>
@@ -65,7 +66,7 @@ export function AnalyticsSeries({ path, workspaceId, metric, filters, report }: 
                   const amount = value === null ? "Unavailable" : `${formatAnalyticsMetric(metric, value)}${complete ? "" : " recorded"}`;
                   return (
                     <Link key={period} className={styles.point} data-age={index < points.length / 3 ? "start" : index > points.length * 2 / 3 ? "end" : "middle"}
-                      href={analyticsSessionsHref(workspaceId, filters, report.firstDay, { period })}
+                      href={analyticsSessionsHref(workspaceId, filters, report.firstDay, { period, metric })}
                       aria-label={`${label}, ${amount}. Open sessions.`}>
                       <span className={styles.bar} data-coverage={value === null ? "unavailable" : complete ? "complete" : "partial"}
                         style={{ "--height": `${100 * (value ?? 0) / maxHeight}%` } as CSSProperties} aria-hidden />
@@ -123,6 +124,42 @@ export function UsageTable({ title, rows, hrefFor, more }: {
             </tbody>
           </table>
         </div>
+      ) : <p className={styles.emptyTable}>No data in this period.</p>}
+    </section>
+  );
+}
+
+export function MemberUsage({ rows, metric, workspaceId, filters, firstDay }: {
+  rows: ReturnType<typeof summarizeMemberMetric>;
+  metric: AnalyticsMetric;
+  workspaceId: string;
+  filters: AnalyticsFilters;
+  firstDay?: string;
+}) {
+  const peak = rows.reduce((max, { value }) => Math.max(max, value ?? 0), 1);
+  return (
+    <section aria-labelledby="member-usage" className={styles.tablePanel}>
+      <div className={styles.sectionHeading}>
+        <h2 id="member-usage">Members</h2>
+        <span className={styles.memberMetric}>{analyticsMetrics[metric]}</span>
+      </div>
+      {rows.length ? (
+        <ul className={styles.memberUsage}>
+          {rows.map(({ key, name, memberId, value, complete }) => (
+            <li key={key}>
+              {memberId ? (
+                <Link href={analyticsSessionsHref(workspaceId, filters, firstDay, { member: memberId, metric })}>{name}</Link>
+              ) : <span>{name}</span>}
+              <div className={styles.memberTrack} aria-hidden>
+                {value !== null && <div className={styles.memberBar} data-complete={complete} style={{ width: `${100 * (value / peak)}%` }} />}
+              </div>
+              <strong>
+                {value === null ? "Unavailable" : formatAnalyticsMetric(metric, value)}
+                {value !== null && !complete && <small>Partial</small>}
+              </strong>
+            </li>
+          ))}
+        </ul>
       ) : <p className={styles.emptyTable}>No data in this period.</p>}
     </section>
   );

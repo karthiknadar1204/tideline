@@ -1,8 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
-import { workspaceTeam } from "@tideline/contracts";
 import { notFound } from "next/navigation";
 import { teamPanel, workspaceRoleLabel } from "../../../../lib/team-ui";
-import { fetchWorkspaceResource, readWorkspaceAccess } from "../../../../lib/workspace";
+import { readWorkspaceAccess, readWorkspaceTeam } from "../../../../lib/workspace";
+import { workspaceMemberLabels } from "../../../../lib/workspace-members";
 import { SettingsHeader } from "../settings/settings-header";
 import { InviteMemberForm, MemberForm, RevokeInviteForm } from "./member-forms";
 
@@ -10,12 +10,10 @@ const expiration = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone
 
 export default async function MembersPage({ params }: PageProps<"/workspace/[id]/members">) {
   const { id } = await params;
-  const [{ userId }, workspace, response] = await Promise.all([
-    auth(), readWorkspaceAccess(id), fetchWorkspaceResource(`${encodeURIComponent(id)}/team`),
-  ]);
+  const [{ userId }, workspace] = await Promise.all([auth(), readWorkspaceAccess(id)]);
   if (workspace.kind !== "team") notFound();
-  if (!response?.ok) throw new Error("Could not open the team roster.");
-  const team = workspaceTeam.parse(await response.json());
+  const team = await readWorkspaceTeam(id);
+  const labels = workspaceMemberLabels(team.members);
   const isOwner = workspace.role === "owner";
   const canInvite = workspace.role !== "member";
 
@@ -35,15 +33,15 @@ export default async function MembersPage({ params }: PageProps<"/workspace/[id]
         <h2 className="font-semibold" id="team-roster">Team roster</h2>
         <ul className="divide-y divide-[var(--workspace-border)] border-t border-[var(--workspace-border)]">
           {team.members.map((member) => {
-            const name = member.email ?? (member.role === "owner" ? "Workspace owner" : "Team member");
+            const name = labels.get(member.userId);
             const role = member.role;
             return (
               <li key={member.userId} className="flex flex-wrap items-center justify-between gap-3 py-3 last:pb-0">
                 <div className="min-w-0 break-all">
                   <p className="text-sm font-medium">{name}{member.userId === userId && <span className="text-[var(--workspace-muted)]"> (you)</span>}</p>
-                  <p className="mt-0.5 text-sm text-[var(--workspace-muted)]">{workspaceRoleLabel[role]}</p>
+                  <p className="mt-0.5 text-sm text-[var(--workspace-muted)]">{workspaceRoleLabel[role]}{member.directoryManaged && " · Clerk directory"}</p>
                 </div>
-                {role !== "owner" && (isOwner || (canInvite && role === "member")) && (
+                {role !== "owner" && !member.directoryManaged && (isOwner || (canInvite && role === "member")) && (
                   <MemberForm key={`${member.userId}:${role}`} workspaceId={id} userId={member.userId} role={role} canChangeRole={isOwner} />
                 )}
               </li>

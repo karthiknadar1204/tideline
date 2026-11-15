@@ -1,13 +1,8 @@
 import { MAX_SESSION_COMMITS, MAX_SESSION_FINDINGS } from "@tideline/contracts";
 import type { SafetyFinding } from "@tideline/contracts";
+import { redactConversationText } from "@tideline/contracts/redaction";
 
-const automaticRedactions: [RegExp, string][] = [
-  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g, "[REDACTED PRIVATE KEY]"],
-  [/\b(?:sk-[A-Za-z0-9_-]{16,}|(?:sk|rk)_(?:test|live)_[A-Za-z0-9_+=/-]{16,}|AIza[A-Za-z0-9_-]{35}|tdsync_[0-9a-f]{64}|(?:github_pat_|gh[pousr]_|xox[baprs]-)[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/g, "[REDACTED TOKEN]"],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{12,}={0,2}/gi, "Bearer [REDACTED]"],
-  [/(\b(?:[A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|PASSWORD)|password)\s*[:=]\s*)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s,;]+)/gi, "$1[REDACTED]"],
-  [/(https?:\/\/[^\s:/@]+:)[^\s/@]+(?=@)/gi, "$1[REDACTED]"],
-];
+export { redactConversationText };
 
 export type SessionEvidence = {
   throughLine: number;
@@ -15,10 +10,6 @@ export type SessionEvidence = {
   commitCandidates: { hash: string; line: number }[];
   truncated: boolean;
 };
-
-export function redactConversationText(text: string) {
-  return automaticRedactions.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text);
-}
 
 type Command = { words: string[]; separator: string };
 const shell = /^(?:.*\/)?(?:bash|dash|sh|zsh)$/;

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { tidelineApiOrigin } from "./login";
+import { syncAutostart } from "./sync-autostart";
 import { backgroundStartupTimeout, openSyncStorage, SyncLockError, SyncSetupMissingError } from "./sync-storage";
 
 type Storage = Awaited<ReturnType<typeof openSyncStorage>>;
@@ -28,6 +29,8 @@ export async function openCollectorStorage(backgroundId?: string) {
 }
 
 export async function readBackgroundStatus(storage: Storage) {
+  const autostart = await syncAutostart()?.status().catch(() => undefined);
+  if (autostart?.running) return "Running";
   const run = storage.background();
   if (!run || run.phase === "stopped") return "Stopped";
   if (run.phase === "starting") {
@@ -51,6 +54,10 @@ export async function startBackgroundSync() {
     if (config.apiOrigin !== tidelineApiOrigin()) throw new Error("TIDELINE_API_URL differs from the approved sync destination.");
     if (config.revoked || Date.now() >= Date.parse(config.expiresAt)) {
       throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
+    }
+    if (await syncAutostart()?.start()) {
+      console.info("Automatic sync was started. Run tideline sync autostart status to check it.");
+      return;
     }
 
     const locked = await openSyncStorage({ lock: true }).catch((error) => {
@@ -108,7 +115,8 @@ export async function startBackgroundSync() {
   }
 }
 
-export async function stopBackgroundSync({ quiet = false }: { quiet?: boolean } = {}) {
+export async function stopBackgroundSync({ quiet = false, includeAutostart = true } = {}) {
+  const stoppedAutostart = includeAutostart && await syncAutostart()?.stop();
   const storage = await openSyncStorage().catch((error) => {
     if (!quiet || !(error instanceof SyncSetupMissingError)) throw error;
   });
@@ -123,6 +131,12 @@ export async function stopBackgroundSync({ quiet = false }: { quiet?: boolean } 
         await delay(100);
       }
       storage.finishBackground(run.id, "stopped");
+    } else if (stoppedAutostart) {
+      const deadline = performance.now() + backgroundStartupTimeout;
+      while (await storage.collectorLockHeld()) {
+        if (performance.now() >= deadline) throw new Error("Automatic sync is still stopping. Check tideline sync status.");
+        await delay(100);
+      }
     }
     if (!quiet) console.info("Background sync is stopped.");
   } finally {

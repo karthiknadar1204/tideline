@@ -4,10 +4,11 @@ import Link from "next/link";
 import { readReportFilters } from "../../../../lib/reports";
 import { formatCount } from "../../../../lib/usage";
 import { analyticsHref, analyticsSessionsHref, buildWorkspaceAnalytics, readAnalyticsMetric } from "../../../../lib/workspace-analytics";
-import { listWorkspaceSessions } from "../../../../lib/workspace";
+import { listWorkspaceInsightSessions } from "../../../../lib/workspace";
 import { AnalyticsControls } from "../dashboard/analytics-controls";
 import { AnalyticsSeries, UsageTable } from "../dashboard/analytics";
 import styles from "../dashboard/analytics.module.css";
+import { readRepositoryFilesParams, RepositoryFiles, RepositoryInstructions } from "./evidence";
 
 const recentLimit = 20;
 const sessionDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
@@ -48,8 +49,8 @@ export default async function RepositoriesPage({ params, searchParams }: PagePro
   const now = new Date();
   const filters = readReportFilters(query, now);
   const metric = readAnalyticsMetric(query.metric);
-  const view = query.view === "sessions" ? "sessions" : undefined;
-  const sessions = await listWorkspaceSessions(id);
+  const view = query.view === "sessions" || query.view === "files" || query.view === "instructions" ? query.view : undefined;
+  const sessions = await listWorkspaceInsightSessions(id);
   const report = buildWorkspaceAnalytics(sessions, filters);
   const repository = sessions.find(({ analytics }) => analytics?.repository?.key === filters.repository)?.analytics?.repository;
   const today = now.toISOString().slice(0, 10);
@@ -81,13 +82,16 @@ export default async function RepositoriesPage({ params, searchParams }: PagePro
       <Link className={styles.back} href={analyticsHref(path, { ...filters, repository: undefined }, { metric })}>← Repositories</Link>
       <header className={styles.header}>
         <h1>{repository.name}</h1>
-        <AnalyticsControls key={controlsKey} path={path} filters={filters} metric={metric} today={today} view={view} />
+        {view !== "instructions" && <AnalyticsControls key={controlsKey} path={path} filters={filters} metric={metric} today={today} view={view} />}
       </header>
       <nav className={styles.tabs} aria-label="Repository views">
         <Link href={analyticsHref(path, filters, { metric })} aria-current={view ? undefined : "page"}>Overview</Link>
-        <Link href={analyticsHref(path, filters, { metric, view: "sessions" })} aria-current={view ? "page" : undefined}>Sessions</Link>
+        <Link href={analyticsHref(path, filters, { metric, view: "sessions" })} aria-current={view === "sessions" ? "page" : undefined}>Sessions</Link>
+        <Link href={analyticsHref(path, filters, { metric, view: "files" })} aria-current={view === "files" ? "page" : undefined}>Files</Link>
+        <Link href={analyticsHref(path, filters, { metric, view: "instructions" })} aria-current={view === "instructions" ? "page" : undefined}>Context</Link>
         <Link href={analyticsHref(`${workspace}/skills`, filters)}>Skills</Link>
         <Link href={analyticsHref(`${workspace}/mcp`, filters)}>MCP</Link>
+        <Link href={analyticsHref(`${workspace}/reports/github`, { ...filters, source: undefined })}>GitHub</Link>
       </nav>
       {!view && (
         <>
@@ -96,7 +100,12 @@ export default async function RepositoriesPage({ params, searchParams }: PagePro
             hrefFor={({ key }) => key ? analyticsSessionsHref(id, filters, report.firstDay, { model: key }) : undefined} />
         </>
       )}
-      <RepositorySessions path={workspace} sessions={report.sessions} listHref={listHref} />
+      {view === "files" ? (
+        <RepositoryFiles workspaceId={id} repository={repository.key} href={analyticsHref(path, filters, { metric, view })}
+          filters={readRepositoryFilesParams(query, { from: report.firstDay, to: filters.through, source: filters.source })} />
+      ) : view === "instructions" ? (
+        <RepositoryInstructions workspaceId={id} repository={repository.key} />
+      ) : <RepositorySessions path={workspace} sessions={report.sessions} listHref={listHref} />}
     </main>
   );
 }

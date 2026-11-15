@@ -1,8 +1,9 @@
 import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createCodexActivity } from "./codex-activity";
+import { codexContext, readCodexSubagents } from "./codex-subagents";
 import { createSessionCapture } from "./session-capture";
-import { createProjectScope, readJsonl } from "./session-jsonl";
+import { appendPreviewMessage, createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { combineTokens, createModelUsage, readModelId, zeroTokens } from "./session-usage";
@@ -46,7 +47,6 @@ const rolloutTimestamp = z.iso.datetime();
 const messageRecord = z.object({ type: z.literal("message"), role: z.enum(["user", "assistant"]) });
 const messageContent = z.object({ content: z.array(z.unknown()) });
 const textPart = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() });
-const codexContext = /^(?:#\s*agents\.md instructions for\b|<(?:environment_context|user_instructions|permissions instructions|skill|skills_instructions)(?:\s|>))/iu;
 
 function isRootSession(metadata: z.infer<typeof sessionMetadata>) {
   const { parent_thread_id: parentThread, forked_from_id: forkedFrom, source, thread_source: threadSource } = metadata;
@@ -75,6 +75,7 @@ export function readCodexSession(path: string, options: LiveReadOptions): Promis
 export async function readCodexSession(path: string, options?: LiveReadOptions): Promise<SessionProjection | LiveSession | undefined> {
   let session: Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> | undefined;
   const events: SessionProjection["events"] = [];
+  let previewBytes = 0;
   const projectScope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
   const checkoutOf = options?.projectRoot;
   let projectDirectory: string | undefined;
@@ -91,7 +92,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const modelsSinceLastUsage = new Set<string | null>();
   let previousTokens = zeroTokens();
 
-  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails)) {
+  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails, options?.transcriptPreview)) {
     const record = rolloutRecord.safeParse(value);
     if (!record.success) throw new Error(`Invalid Codex record at line ${line}.`);
 
@@ -204,9 +205,15 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
     safety?.scanCredential(text, line);
 
     if (events.length === MAX_CODEX_IMPORT_EVENTS) {
+      if (options?.transcriptPreview) break;
       throw new Error(`The session exceeds the ${MAX_CODEX_IMPORT_EVENTS}-message import limit.`);
     }
-    events.push({ role: message.data.role, text, line, timestamp: timestamp.data });
+    const event = { role: message.data.role, text, line, timestamp: timestamp.data };
+    if (options?.transcriptPreview) {
+      const total = appendPreviewMessage(events, event, previewBytes);
+      if (total === null) break;
+      previewBytes = total;
+    } else events.push(event);
     if (message.data.role === "user") lastPromptLine = line;
     throughLine = line;
   }
@@ -216,9 +223,23 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity,
-          capture: capture?.snapshot(events.at(-1)?.line ?? 0) },
-        evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
+      const lastMessageLine = events.at(-1)?.line ?? 0;
+      const links = capture && options.captureSubagents ? activity.subagentLinks() : [];
+      const subagents = capture && options.captureSubagents && options.findCodexSubagent ? await readCodexSubagents({
+        sessionId: session.sourceSessionId, links, find: options.findCodexSubagent,
+        checkout: checkout ?? options.projectDirectory ?? projectDirectory, projectScope, projectRoot: options.projectRoot,
+        includeRaw: options.transcriptPreview,
+      }) : undefined;
+      const captureLine = Math.max(lastMessageLine, ...links.map(({ line }) => line));
+      const detail = capture?.snapshot(captureLine);
+      return {
+        projectDirectory,
+        session: { ...session, events, analytics, activity: sessionActivity,
+          capture: detail && (subagents ? { ...detail, subagents: subagents.section } : detail) },
+        evidence: safety.snapshot(lastMessageLine),
+        sidecarRevision: subagents?.sidecarRevision,
+        rawSubagents: subagents?.raw,
+      };
     }
     return;
   }

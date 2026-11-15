@@ -11,8 +11,11 @@ import { SessionUsage } from "../../usage-summary";
 import { SessionRefresh } from "../session-refresh";
 import styles from "../sessions.module.css";
 import { SessionFiles, SessionSetup } from "./capture";
+import { DeleteSessionButton } from "./delete-session-button";
 import { SessionReader } from "./reader";
 import { SessionShare } from "./session-share";
+import { SessionSubagents } from "./subagents";
+import { FullTranscript } from "./full-transcript";
 import { buildSessionTimeline } from "./timeline";
 
 const startedDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
@@ -116,6 +119,7 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
         displayed={{ messageCount: session.messageCount, lastMessageLine: lastMessage.line }}
         status={share}
       />}
+      {mayShare && <DeleteSessionButton workspaceId={id} sessionId={sessionId} filters={filters} />}
     </>
   );
 
@@ -140,7 +144,7 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
         </div>
         <div className={styles.readerLinks}>
           <Suspense fallback={null}><SessionNavigation workspaceId={id} sessionId={sessionId} filters={filters} /></Suspense>
-          <SessionRefresh label="Refresh session" />
+          <SessionRefresh label="Refresh session" whenIdle />
         </div>
       </header>
       <SessionReader
@@ -148,6 +152,8 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
         {...buildSessionTimeline(session, agent, session.capture)}
         context={context}
         panels={{
+          transcript: <FullTranscript url={`/workspace/${id}/sessions/${sessionId}/transcript`} />,
+          subagents: <SessionSubagents session={session} capture={session.capture} />,
           files: <SessionFiles capture={session.capture} source={session.source} />,
           setup: <SessionSetup capture={session.capture} session={session} />,
           usage: <SessionUsage analytics={session.analytics} />,

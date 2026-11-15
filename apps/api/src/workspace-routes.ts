@@ -2,16 +2,23 @@ import { createHash, randomBytes } from "node:crypto";
 import { createClerkClient } from "@clerk/backend";
 import { parsePublishableKey } from "@clerk/shared/keys";
 import {
+  accountDeletionStatus,
   cliInstallConfig,
   cliLoginResponse,
   cliSessionListQuery,
+  confirmAccountDeletion,
+  confirmWorkspaceDeletion,
   MAX_CODEX_IMPORT_BYTES,
   MAX_SESSION_CAPTURE_BYTES,
+  MAX_SESSION_SUBAGENT_BYTES,
   sessionImportRequest,
   syncEnrollmentRequest,
   syncEnrollmentResponse,
   workspaceNameUpdate,
+  workspaceAlias,
+  workspaceAliasUpdate,
   workspaceCliStatus,
+  workspaceInsightSessionSummariesResponse,
   workspaceResponse,
   workspaceSessionDetailResponse,
   workspaceSessionSearchQuery,
@@ -19,26 +26,38 @@ import {
 } from "@tideline/contracts";
 import type { CliAccount, WorkspaceResponse, WorkspaceSessionSearchResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
+import { createBillingStore } from "@tideline/db/billing";
+import { createClerkDirectoryStore } from "@tideline/db/clerk-directory";
 import { createCliSetupStore } from "@tideline/db/cli-setups";
 import { createSavedReportStore } from "@tideline/db/reports";
 import { createSessionShareStore } from "@tideline/db/shares";
+import { createGitHubActivityStore } from "@tideline/db/github-activity";
 import { createSessionStore } from "@tideline/db/sessions";
+import { createTranscriptStore } from "@tideline/db/transcripts";
+import { createDigestDeliveryStore } from "@tideline/db/digest-delivery";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createMiddleware } from "hono/factory";
 import { registerCliSetupRoutes } from "./cli-setup-routes";
+import { registerClerkDirectoryRoutes } from "./clerk-directory-routes";
+import { registerBillingRoutes } from "./billing-routes";
 import { priceSession } from "./pricing";
 import { registerSavedReportRoutes } from "./saved-report-routes";
 import { registerSessionShareRoutes } from "./session-share-routes";
+import { registerGitHubActivityRoutes } from "./github-activity-routes";
 import { registerTeamRoutes } from "./team-routes";
 import { registerWorkspaceActivityRoutes } from "./workspace-activity-routes";
+import { registerTranscriptReaders, registerTranscriptRoutes } from "./transcript-routes";
+import { registerDigestRoutes } from "./digest-routes";
+import { registerRepositoryEvidenceRoutes } from "./repository-evidence-routes";
+import { registerCliSyncCoverageRoute, registerSyncInventoryRoutes } from "./sync-inventory-routes";
 
 export type WorkspaceContext = { Variables: { userId: string; cliAccount: CliAccount } };
 const grantLifetimeMs = 30 * 24 * 60 * 60 * 1_000;
 const importTooLarge = "Session import exceeds the size limit.";
 const importBodyLimit = bodyLimit({
-  maxSize: MAX_CODEX_IMPORT_BYTES + MAX_SESSION_CAPTURE_BYTES + ',"capture":'.length,
+  maxSize: MAX_CODEX_IMPORT_BYTES + MAX_SESSION_CAPTURE_BYTES + MAX_SESSION_SUBAGENT_BYTES + ',"capture":,"subagents":'.length,
   onError: (context) => context.json({ error: importTooLarge }, 413),
 });
 
@@ -95,10 +114,15 @@ function getWorkspaceServices() {
       authorizedParties: [new URL(webOrigin).origin],
     },
     workspaces: createWorkspaceStore(databaseUrl),
+    clerkDirectory: createClerkDirectoryStore(databaseUrl),
     setups: createCliSetupStore(databaseUrl),
     sessions: createSessionStore(databaseUrl),
+    transcripts: createTranscriptStore(databaseUrl),
     shares: createSessionShareStore(databaseUrl),
+    githubActivity: createGitHubActivityStore(databaseUrl),
     savedReports: createSavedReportStore(databaseUrl),
+    digestDelivery: createDigestDeliveryStore(databaseUrl),
+    billing: createBillingStore(databaseUrl),
   };
 }
 
@@ -124,7 +148,7 @@ export function createWorkspaceRoutes() {
     return config.success ? context.json(config.data) : context.json({ error: "CLI approval is not configured." }, 503);
   });
 
-  routes.use("/workspaces/*", async (context, next) => {
+  const requireClerkSession = createMiddleware<WorkspaceContext>(async (context, next) => {
     if (!/^Bearer \S+$/.test(context.req.header("Authorization") ?? "")) {
       return context.json({ error: "Sign in to access your workspace." }, 401);
     }
@@ -137,9 +161,40 @@ export function createWorkspaceRoutes() {
     if (!auth?.isAuthenticated || auth.tokenType !== "session_token" || !auth.userId) {
       return context.json({ error: "Sign in to access your workspace." }, 401);
     }
+    if (await workspaces.directoryIsBlocked(auth.userId)) return context.json({ error: "Directory access is inactive." }, 401);
 
     context.set("userId", auth.userId);
     await next();
+  });
+
+  routes.use("/workspaces/*", requireClerkSession, async (context, next) => {
+    if (await workspaces.accountIsRetiring(context.get("userId"))) {
+      return context.json({ error: "Account deletion is in progress." }, 410);
+    }
+    await next();
+  });
+
+  routes.get("/account/deletion", requireClerkSession, async (context) => {
+    const status = await workspaces.accountDeletionStatus(context.get("userId"));
+    return context.json(accountDeletionStatus.parse(status));
+  });
+
+  routes.delete("/account/deletion", requireClerkSession, bodyLimit({ maxSize: 512 }), async (context) => {
+    const confirmation = confirmAccountDeletion.safeParse(await context.req.json().catch(() => null));
+    if (!confirmation.success) return context.json({ error: "Type DELETE to confirm account deletion." }, 400);
+    const userId = context.get("userId");
+    if (await workspaces.retireAccount(userId) === "owns-teams") {
+      return context.json({ error: "This account owns a team workspace." }, 409);
+    }
+
+    try {
+      await clerk.users.deleteUser(userId);
+    } catch (error) {
+      if (!(error instanceof Error) || !("status" in error) || error.status !== 404) {
+        return context.json({ error: "Account data is deleted. Retry to finish removing your sign-in." }, 503);
+      }
+    }
+    return context.body(null, 204);
   });
 
   routes.post("/workspaces/personal", async (context) => {
@@ -148,9 +203,37 @@ export function createWorkspaceRoutes() {
   });
 
   registerWorkspaceActivityRoutes(routes, sessions);
+  registerClerkDirectoryRoutes(routes, services.clerkDirectory, clerk, process.env.CLERK_WEBHOOK_SIGNING_SECRET);
+  registerBillingRoutes(routes, services.billing);
+  registerTranscriptRoutes(routes, services.transcripts, parseSyncAuthorization);
+  registerDigestRoutes(routes, services);
+  registerRepositoryEvidenceRoutes(routes, sessions, parseSyncAuthorization);
+  registerSyncInventoryRoutes(routes, sessions, parseSyncAuthorization);
 
   registerTeamRoutes(routes, workspaces, clerk);
   registerSessionShareRoutes(routes, shares);
+
+  routes.get("/workspaces/address/:key", async (context) => {
+    const key = context.req.param("key");
+    const id = workspaceResponse.shape.id.safeParse(key).data;
+    const alias = id ? undefined : workspaceAlias.safeParse(key).data;
+    const lookup = id ? { id } : alias && { alias };
+    const address = lookup ? await workspaces.readAddress(context.get("userId"), lookup) : undefined;
+    return address ? context.json(address) : context.json({ error: "Workspace not found." }, 404);
+  });
+
+  routes.patch("/workspaces/:id/address", bodyLimit({ maxSize: 1_024 }), async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id")).data;
+    if (!id) return context.json({ error: "Workspace not found." }, 404);
+    const update = workspaceAliasUpdate.safeParse(await context.req.json().catch(() => null));
+    if (!update.success) return context.json({ error: "Enter a valid workspace URL alias." }, 400);
+    const result = await workspaces.setAlias({ workspaceId: id, userId: context.get("userId") }, update.data.alias);
+    switch (result) {
+      case "saved": return context.json({ id, alias: update.data.alias });
+      case "conflict": return context.json({ error: "That workspace URL alias is in use." }, 409);
+      case "unavailable": return context.json({ error: "Workspace not found." }, 404);
+    }
+  });
 
   routes.get("/workspaces/:id", async (context) => {
     const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
@@ -191,6 +274,20 @@ export function createWorkspaceRoutes() {
     return workspace ? context.json(workspace) : context.json({ error: "Workspace not found." }, 404);
   });
 
+  routes.delete("/workspaces/:id", bodyLimit({ maxSize: 2_048 }), async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    if (!id.success) return context.json({ error: "Workspace not found." }, 404);
+    const confirmation = confirmWorkspaceDeletion.safeParse(await context.req.json().catch(() => null));
+    if (!confirmation.success) return context.json({ error: "Enter the workspace name to confirm deletion." }, 400);
+
+    const result = await workspaces.deleteOwned({ workspaceId: id.data, userId: context.get("userId") }, confirmation.data.name);
+    switch (result) {
+      case "deleted": return context.body(null, 204);
+      case "unavailable": return context.json({ error: "Workspace not found." }, 404);
+      case "name-mismatch": return context.json({ error: "Enter the workspace name exactly as it appears in Settings." }, 409);
+    }
+  });
+
   routes.get("/workspaces/:id/usage-targets", async (context) => {
     const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
     if (!id.success) return context.json({ error: "Workspace not found." }, 404);
@@ -218,18 +315,25 @@ export function createWorkspaceRoutes() {
 
   routes.get("/workspaces/:workspaceId/sessions", async (context) => {
     const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
-    if (!workspaceId.success || !await workspaces.findAccessible({
+    const userId = context.get("userId");
+    const workspace = workspaceId.success && await workspaces.findAccessible({
       workspaceId: workspaceId.data,
-      userId: context.get("userId"),
-    })) {
+      userId,
+    });
+    if (!workspace) {
       return context.json({ error: "Workspace not found." }, 404);
     }
 
-    const summaries = await sessions.listReady(workspaceId.data);
+    if (context.req.query("insights") === "1") {
+      const summaries = await sessions.listReadyWithInsights(workspace.id, userId);
+      return context.json(workspaceInsightSessionSummariesResponse.parse(summaries.map(priceSession)));
+    }
+
+    const summaries = await sessions.listReady(workspace.id);
     return context.json(summaries.map(priceSession));
   });
 
-  async function searchSessions(context: Context<WorkspaceContext>, userId: string) {
+  async function searchSessions(context: Context<WorkspaceContext>, userId: string, includeActivityFacets = false) {
     const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
     if (!workspaceId.success || !await workspaces.findAccessible({ workspaceId: workspaceId.data, userId })) {
       return context.json({ error: "Workspace not found." }, 404);
@@ -238,11 +342,12 @@ export function createWorkspaceRoutes() {
     const filters = workspaceSessionSearchQuery.safeParse(context.req.query());
     if (!filters.success) return context.json({ error: "Invalid search or session filters." }, 400);
 
-    const result = await sessions.searchReady(workspaceId.data, filters.data);
-    return context.json({ ...result, sessions: result.sessions.map(priceSession) } satisfies WorkspaceSessionSearchResponse);
+    const { sessions: rows, skills, subagents, ...result } = await sessions.searchReady(workspaceId.data, filters.data, { includeActivityFacets });
+    const response = { ...result, sessions: rows.map(priceSession) } satisfies WorkspaceSessionSearchResponse;
+    return context.json(includeActivityFacets ? { ...response, skills, subagents } : response);
   }
 
-  routes.get("/workspaces/:workspaceId/session-search", (context) => searchSessions(context, context.get("userId")));
+  routes.get("/workspaces/:workspaceId/session-search", (context) => searchSessions(context, context.get("userId"), true));
 
   routes.get("/workspaces/:workspaceId/sessions/:sessionId", async (context) => {
     const uuid = workspaceResponse.shape.id;
@@ -261,6 +366,14 @@ export function createWorkspaceRoutes() {
     }
     context.header("Cache-Control", "private, no-store");
     return context.json(workspaceSessionDetailResponse.parse({ ...priceSession(session), capture: session.capture ?? null }));
+  });
+
+  routes.delete("/workspaces/:workspaceId/sessions/:sessionId", async (context) => {
+    const uuid = workspaceResponse.shape.id;
+    const workspaceId = uuid.safeParse(context.req.param("workspaceId")).data;
+    const sessionId = uuid.safeParse(context.req.param("sessionId")).data;
+    const deleted = workspaceId && sessionId && await sessions.deleteManaged({ workspaceId, sessionId, userId: context.get("userId") });
+    return deleted ? context.body(null, 204) : context.json({ error: "Session not found." }, 404);
   });
 
   const requireClerkCli = createMiddleware<WorkspaceContext>(async (context, next) => {
@@ -282,6 +395,11 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "Clerk approval is required." }, 401);
     }
 
+    if (await workspaces.accountIsRetiring(auth.userId)) {
+      return context.json({ error: "Account deletion is in progress." }, 410);
+    }
+    if (await workspaces.directoryIsBlocked(auth.userId)) return context.json({ error: "Directory access is inactive." }, 401);
+
     context.set("userId", auth.userId);
     await next();
   });
@@ -302,13 +420,18 @@ export function createWorkspaceRoutes() {
   });
 
   registerSavedReportRoutes(routes, savedReports, requireCliAccount);
+  registerTranscriptReaders(routes, services.transcripts, requireCliAccount);
+  registerGitHubActivityRoutes(routes, services.githubActivity, requireCliAccount, parseSyncAuthorization);
+  registerCliSyncCoverageRoute(routes, sessions, requireCliAccount);
 
   routes.post("/cli/account", requireClerkCli, async (context) => {
     const userId = context.get("userId");
     const workspace = await workspaces.ensurePersonal(userId);
     const token = `tdcli_${randomBytes(32).toString("hex")}`;
     const expiresAt = new Date(Date.now() + grantLifetimeMs);
-    await workspaces.enrollCli(hashToken(token), workspace.id, expiresAt);
+    if (!await workspaces.enrollCli(hashToken(token), workspace.id, expiresAt)) {
+      return context.json({ error: "The CLI account is unavailable." }, 401);
+    }
     return context.json(cliLoginResponse.parse({ token, expiresAt: expiresAt.toISOString(), account: { userId, workspace } }), 201);
   });
 
@@ -360,8 +483,12 @@ export function createWorkspaceRoutes() {
     })) {
       return context.json({ error: "Session not found." }, 404);
     }
-    const session = await sessions.findReady(workspaceId.data, sessionId.data);
-    return session ? context.json(priceSession(session)) : context.json({ error: "Session not found." }, 404);
+    const includeCapture = context.req.query("details") === "1";
+    const session = await sessions.findReady(workspaceId.data, sessionId.data, { includeCapture });
+    if (!session) return context.json({ error: "Session not found." }, 404);
+    context.header("Cache-Control", "private, no-store");
+    const detail = priceSession(session);
+    return context.json(includeCapture ? workspaceSessionDetailResponse.parse({ ...detail, capture: session.capture ?? null }) : detail);
   });
 
   routes.post(

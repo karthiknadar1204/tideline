@@ -34,16 +34,14 @@
   font-family: "Tideline Geist", system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  .landing {
-    --paper: #19231d;
-    --ink: #edf2e5;
-    --muted: #bfd0c0;
-    --accent: #b3d3b9;
-    --line: #415246;
-    --panel: #26372d;
-    --panel-subtle: #32463a;
-  }
+:global(html[data-theme="dark"]) .landing {
+  --paper: #19231d;
+  --ink: #edf2e5;
+  --muted: #bfd0c0;
+  --accent: #b3d3b9;
+  --line: #415246;
+  --panel: #26372d;
+  --panel-subtle: #32463a;
 }
 
 .landing a:focus-visible {

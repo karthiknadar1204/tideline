@@ -3,10 +3,15 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./billing": "./src/billing.ts",
+    "./clerk-directory": "./src/clerk-directory.ts",
+    "./digest-delivery": "./src/digest-delivery.ts",
+    "./github-activity": "./src/github-activity.ts",
     ".": "./src/workspaces.ts",
     "./migrate": "./src/migrate.ts",
     "./reports": "./src/reports.ts",
     "./sessions": "./src/sessions.ts",
+    "./transcripts": "./src/transcripts.ts",
     "./cli-setups": "./src/cli-setups.ts",
     "./shares": "./src/shares.ts"
   },

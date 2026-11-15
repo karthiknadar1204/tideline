@@ -91,6 +91,13 @@ test("background sync keeps uploading after the launcher exits and stops on requ
     await waitForDelivery(second);
     assert.deepEqual(delivered, new Set([first, second]));
     assert.equal(calls.get(first), 1, "Restart does not submit an unchanged session again");
+    await cli("stop");
+    const third = await addSession();
+    assert.match((await cli("once")).stdout, /Received: 3\. Failed: 0\./);
+    assert.ok(delivered.has(third));
+    assert.match((await cli("status")).stdout, /Background sync: Stopped/);
+    await cli("once");
+    assert.equal(calls.get(third), 1);
   } finally {
     try {
       await cli("stop");

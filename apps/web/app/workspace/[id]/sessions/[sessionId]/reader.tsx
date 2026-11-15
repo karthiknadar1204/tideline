@@ -8,6 +8,8 @@ import styles from "../sessions.module.css";
 const views = [
   { id: "timeline", label: "Timeline" },
   { id: "conversation", label: "Conversation" },
+  { id: "transcript", label: "Transcript" },
+  { id: "subagents", label: "Subagents" },
   { id: "files", label: "Files" },
   { id: "setup", label: "Setup" },
   { id: "usage", label: "Usage" },
@@ -26,18 +28,21 @@ export function SessionReader({ entries, prompts, context, panels, activityNote 
   panels: Record<StandaloneView, ReactNode>;
   activityNote: string | undefined;
 }) {
-  const requested = useSearchParams().get("view");
+  const search = useSearchParams();
+  const requested = search.get("view");
   const active = views.find(({ id }) => requested === id)?.id ?? "timeline";
   const tabs = useRef<HTMLDivElement>(null);
   const showsConversation = active === "timeline" || active === "conversation";
 
+  function viewQuery(view: View) {
+    const query = new URLSearchParams(search);
+    if (view === "timeline") query.delete("view");
+    else query.set("view", view);
+    return `?${query}`;
+  }
+
   function selectView(view: View) {
-    if (view === active) return;
-    const url = new URL(window.location.href);
-    if (view === "timeline") url.searchParams.delete("view");
-    else url.searchParams.set("view", view);
-    url.hash = "";
-    window.history.pushState(null, "", url);
+    if (view !== active) window.history.pushState(null, "", viewQuery(view));
   }
 
   function moveFocus(event: KeyboardEvent, index: number) {
@@ -50,7 +55,7 @@ export function SessionReader({ entries, prompts, context, panels, activityNote 
     if (next === undefined) return;
     event.preventDefault();
     selectView(views[next].id);
-    tabs.current?.querySelectorAll("button")[next]?.focus();
+    tabs.current?.querySelectorAll("a")[next]?.focus();
   }
 
   return (
@@ -58,19 +63,23 @@ export function SessionReader({ entries, prompts, context, panels, activityNote 
       <section aria-label="Session reader" className={styles.trace}>
         <div ref={tabs} role="tablist" aria-label="Session view" className={styles.timelineTabs}>
           {views.map(({ id, label }, index) => (
-            <button
-              type="button"
+            <a
+              href={viewQuery(id)}
               role="tab"
               id={`session-tab-${id}`}
               key={id}
               aria-selected={active === id}
               aria-controls={`session-panel-${id}`}
               tabIndex={active === id ? 0 : -1}
-              onClick={() => selectView(id)}
+              onClick={(event) => {
+                if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                event.preventDefault();
+                selectView(id);
+              }}
               onKeyDown={(event) => moveFocus(event, index)}
             >
               {label}
-            </button>
+            </a>
           ))}
         </div>
         {views.map(({ id }) => (

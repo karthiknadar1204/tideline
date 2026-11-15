@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 import { link, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import type { SQLOutputValue } from "node:sqlite";
-import { sessionDetailResponse } from "@tideline/contracts";
-import type { SessionDetail } from "@tideline/contracts";
+import { cliSessionExport, githubActivityRows } from "@tideline/contracts";
+import type { CliSessionExport, GitHubActivityRows } from "@tideline/contracts";
 import { z } from "zod";
+import { sessionAgentMessages, sessionAgentRuns, sessionCommits, sessionFileChanges, sessionPrompts, sessionSetupFields, toolCalls } from "./session-tables";
 
 const requestLimit = 16 * 1024 * 1024;
 const resultLimit = 8 * 1024 * 1024;
@@ -13,7 +14,8 @@ const queryTimeoutMs = 5_000;
 
 const workerRequest = z.strictObject({
   query: z.string().min(1).max(16_384),
-  sessions: z.array(sessionDetailResponse),
+  sessions: z.array(cliSessionExport),
+  github: githubActivityRows,
 });
 const valueSchema = z.union([z.string(), z.number(), z.null()]);
 const workerResult = z.discriminatedUnion("kind", [
@@ -57,7 +59,7 @@ function sqlError(error: unknown) {
   return new Error("SQLite could not execute this read-only query. Try a smaller result or a narrower session filter.");
 }
 
-async function executeSql({ query, sessions }: z.infer<typeof workerRequest>): Promise<QueryResult> {
+async function executeSql({ query, sessions, github }: z.infer<typeof workerRequest>): Promise<QueryResult> {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(":memory:", { allowExtension: false, enableDoubleQuotedStringLiterals: false });
   try {
@@ -82,6 +84,13 @@ async function executeSql({ query, sessions }: z.infer<typeof workerRequest>): P
       CREATE TABLE activity (session_id TEXT, kind TEXT, name TEXT, status TEXT, line INTEGER, item_index INTEGER);
       CREATE TABLE commits (session_id TEXT, sha TEXT, line INTEGER, url TEXT);
       CREATE TABLE safety_findings (session_id TEXT, rule TEXT, line INTEGER);
+      CREATE TABLE calls (session_id TEXT, line INTEGER, item_index INTEGER, name TEXT, status TEXT, mcp_server TEXT, input TEXT, output TEXT, truncated INTEGER);
+      CREATE TABLE prompts (session_id TEXT, line INTEGER, timestamp TEXT, text TEXT);
+      CREATE TABLE agent_runs (session_id TEXT, line INTEGER, item_index INTEGER, name TEXT, status TEXT);
+      CREATE TABLE agent_messages (session_id TEXT, line INTEGER, item_index INTEGER, agent_id TEXT, child_line INTEGER, timestamp TEXT, role TEXT, text TEXT);
+      CREATE TABLE file_changes (session_id TEXT, line INTEGER, item_index INTEGER, path TEXT, previous_path TEXT, change TEXT, diff TEXT, truncated INTEGER);
+      CREATE TABLE session_setup (session_id TEXT, key TEXT, value TEXT);
+      CREATE TABLE github_activity (repository TEXT, kind TEXT, id TEXT, title TEXT, timestamp TEXT, status TEXT);
       BEGIN;
     `);
     const insertSession = db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -90,7 +99,15 @@ async function executeSql({ query, sessions }: z.infer<typeof workerRequest>): P
     const insertActivity = db.prepare("INSERT INTO activity VALUES (?, ?, ?, ?, ?, ?)");
     const insertCommit = db.prepare("INSERT INTO commits VALUES (?, ?, ?, ?)");
     const insertFinding = db.prepare("INSERT INTO safety_findings VALUES (?, ?, ?)");
-    for (const { id, source, sourceSessionId, startedAt, title, analytics, activityCounts, activity, messageCount, messages, review } of sessions) {
+    const insertCall = db.prepare("INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const insertPrompt = db.prepare("INSERT INTO prompts VALUES (?, ?, ?, ?)");
+    const insertRun = db.prepare("INSERT INTO agent_runs VALUES (?, ?, ?, ?, ?)");
+    const insertChildMessage = db.prepare("INSERT INTO agent_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    const insertFileChange = db.prepare("INSERT INTO file_changes VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    const insertSetup = db.prepare("INSERT INTO session_setup VALUES (?, ?, ?)");
+    const insertGitHub = db.prepare("INSERT INTO github_activity VALUES (?, ?, ?, ?, ?, ?)");
+    for (const session of sessions) {
+      const { id, source, sourceSessionId, startedAt, title, analytics, activityCounts, activity, messageCount, messages, review } = session;
       insertSession.run(
         id, source, sourceSessionId, startedAt, title, analytics?.repository?.name ?? null, analytics?.repository?.key ?? null,
         messageCount, analytics?.tokenCoverage ?? null, activityCounts?.tools ?? null, activityCounts?.skills ?? null, activityCounts?.children ?? null,
@@ -104,9 +121,22 @@ async function executeSql({ query, sessions }: z.infer<typeof workerRequest>): P
         if (typeof items === "boolean") continue;
         for (const { name, status, line, index } of items) insertActivity.run(id, kind, name, status, line, index);
       }
-      for (const { sha, line, url } of review?.commits ?? []) insertCommit.run(id, sha, line, url);
+      for (const { sha, line, url } of sessionCommits(session)) insertCommit.run(id, sha, line, url);
       for (const { rule, line } of review?.findings ?? []) insertFinding.run(id, rule, line);
+      for (const row of toolCalls(session)) {
+        insertCall.run(id, row.line, row.item_index, row.name, row.status, row.mcp_server, row.input, row.output, row.truncated);
+      }
+      for (const row of sessionPrompts(session)) insertPrompt.run(id, row.line, row.timestamp, row.text);
+      for (const row of sessionAgentRuns(session)) insertRun.run(id, row.line, row.item_index, row.name, row.status);
+      for (const row of sessionAgentMessages(session)) {
+        insertChildMessage.run(id, row.line, row.item_index, row.agent_id, row.child_line, row.timestamp, row.role, row.text);
+      }
+      for (const row of sessionFileChanges(session)) {
+        insertFileChange.run(id, row.line, row.item_index, row.path, row.previous_path, row.change, row.diff, row.truncated);
+      }
+      for (const row of sessionSetupFields(session)) insertSetup.run(id, row.key, row.value);
     }
+    for (const { repository, event } of github) insertGitHub.run(repository, event.kind, event.id, event.title, event.at, event.status);
     db.exec("COMMIT; PRAGMA query_only = ON;");
 
     let statement: ReturnType<typeof db.prepare>;
@@ -222,12 +252,12 @@ async function runWorker(input: string) {
   });
 }
 
-export async function queryLocalSessions(query: string, sessions: AsyncIterable<SessionDetail>, output?: string) {
+export async function queryLocalSessions(query: string, sessions: AsyncIterable<CliSessionExport>, output: string | undefined, github: GitHubActivityRows) {
   const parsedQuery = sqlQuery(query);
   if (output !== undefined && ![".jsonl", ".csv"].includes(extname(output))) {
     throw new Error("SQL output must end in .jsonl or .csv.");
   }
-  const prefix = `{"query":${JSON.stringify(parsedQuery)},"sessions":[`;
+  const prefix = `{"query":${JSON.stringify(parsedQuery)},"github":${JSON.stringify(github)},"sessions":[`;
   const documents: string[] = [];
   let bytes = Buffer.byteLength(prefix) + 2;
   for await (const session of sessions) {

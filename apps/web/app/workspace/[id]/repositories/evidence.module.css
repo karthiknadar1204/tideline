@@ -1,0 +1,129 @@
+.panel {
+  min-width: 0;
+  border: 1px solid var(--workspace-border);
+  border-radius: .7rem;
+  background: var(--workspace-panel);
+}
+
+.heading,
+.pagination,
+.rows li,
+.history summary {
+  padding: .85rem 1rem;
+}
+
+.heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.heading h2 {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.heading p,
+.empty,
+.muted,
+.rows span,
+.pagination,
+.history p {
+  color: var(--workspace-muted);
+  font-size: .8rem;
+}
+
+.heading p {
+  margin-top: .2rem;
+}
+
+.panel a {
+  color: var(--workspace-accent);
+  font-size: .82rem;
+  text-underline-offset: 3px;
+}
+
+.panel a:hover {
+  text-decoration: underline;
+}
+
+.empty,
+.history details > div {
+  padding: .9rem 1rem;
+  border-top: 1px solid var(--workspace-border);
+}
+
+.history p,
+.empty p + p {
+  margin-top: .25rem;
+}
+
+.rows li {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(8rem, 1fr) minmax(9rem, auto);
+  gap: .5rem 1rem;
+}
+
+.rows li,
+.history li,
+.pagination {
+  border-top: 1px solid var(--workspace-border);
+}
+
+.rows li,
+.history summary {
+  overflow-wrap: anywhere;
+}
+
+.history summary {
+  cursor: pointer;
+}
+
+.history details > pre {
+  overflow: auto;
+  max-height: 36rem;
+  padding: .85rem 1rem;
+  border-top: 1px solid var(--workspace-border);
+  background: var(--workspace-subtle);
+  font-size: .78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1.2rem;
+}
+
+@media (max-width: 580px) {
+  .rows li {
+    grid-template-columns: 1fr;
+  }
+}
+.contextGroup h3 {
+  padding: .65rem .95rem;
+  border-top: 1px solid var(--workspace-border);
+  font-size: .8rem;
+  font-weight: 650;
+}
+
+.contextMetadata {
+  display: grid;
+  gap: .35rem;
+  padding: .6rem .9rem;
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+}
+
+.contextMetadata div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .7rem;
+}
+
+.contextMetadata dt {
+  color: var(--workspace-muted);
+}

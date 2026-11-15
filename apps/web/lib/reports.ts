@@ -1,10 +1,9 @@
-import { sessionSource } from "@tideline/contracts";
+import { readDay, sessionSource, shiftDay, utcDay } from "@tideline/contracts";
 import type { SessionSource, SessionSummary } from "@tideline/contracts";
 import { combineUsage, summarizeSession } from "./usage";
 import type { Usage } from "./usage";
 
-const millisecondsPerDay = 86_400_000;
-export const reportPeriods = [7, 30, 90, "all"] as const;
+export const reportPeriods = [1, 7, 30, 90, "all"] as const;
 
 type ReportParams = Record<string, string | string[] | undefined>;
 
@@ -18,6 +17,7 @@ type ReportFilters = {
 type PeriodUsage = {
   period: string;
   sessions: number;
+  reportedFrustration: number;
   usage: Usage;
   activity: {
     coveredSessions: number;
@@ -28,19 +28,7 @@ type PeriodUsage = {
   };
 };
 
-function utcDay(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function shiftDay(day: string, offset: number) {
-  return utcDay(new Date(Date.parse(day) + offset * millisecondsPerDay));
-}
-
-function readDay(value: string | string[] | undefined) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
-  const milliseconds = Date.parse(value);
-  if (Number.isFinite(milliseconds) && utcDay(new Date(milliseconds)) === value) return value;
-}
+type ReportSession = SessionSummary & { reportedFrustration?: boolean };
 
 export function readReportFilters(params: ReportParams | URLSearchParams, now = new Date()): ReportFilters {
   function read(key: string) {
@@ -66,9 +54,11 @@ export function reportFilterParams({ days, through, source, repository }: Report
   return params.toString();
 }
 
-function summarizePeriod(period: string, sessions: SessionSummary[]): PeriodUsage {
+function summarizePeriod(period: string, sessions: ReportSession[]): PeriodUsage {
   const activity: PeriodUsage["activity"] = { coveredSessions: 0, toolCalls: 0, skills: 0, childRuns: 0, truncated: false };
-  for (const { activityCounts } of sessions) {
+  let reportedFrustration = 0;
+  for (const { activityCounts, reportedFrustration: reported } of sessions) {
+    if (reported) reportedFrustration++;
     if (!activityCounts) continue;
     activity.coveredSessions++;
     activity.toolCalls += activityCounts.tools;
@@ -76,13 +66,13 @@ function summarizePeriod(period: string, sessions: SessionSummary[]): PeriodUsag
     activity.childRuns += activityCounts.children;
     activity.truncated ||= activityCounts.truncated;
   }
-  return { period, sessions: sessions.length, usage: combineUsage(sessions.map(({ analytics }) => summarizeSession(analytics))), activity };
+  return { period, sessions: sessions.length, reportedFrustration, usage: combineUsage(sessions.map(({ analytics }) => summarizeSession(analytics))), activity };
 }
 
-export function buildWorkspaceReport(allSessions: SessionSummary[], filters: ReportFilters) {
+export function buildWorkspaceReport<Session extends ReportSession>(allSessions: Session[], filters: ReportFilters) {
   const firstDay = filters.days === "all" ? undefined : shiftDay(filters.through, 1 - filters.days);
   const granularity = firstDay ? "day" : "month";
-  const byPeriod = new Map<string, SessionSummary[]>();
+  const byPeriod = new Map<string, Session[]>();
   const repositories = new Map<string, string>();
   const sessions = allSessions.filter((session) => {
     const repository = session.analytics?.repository;

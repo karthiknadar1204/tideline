@@ -1,7 +1,8 @@
+import { createTranscriptSync } from "./full-transcript";
+import type { LocatedSubagents } from "./full-transcript";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   codexImportResponse,
   MAX_CODEX_IMPORT_BYTES,
@@ -13,15 +14,19 @@ import {
 } from "@tideline/contracts";
 import type { SessionImportRequest } from "@tideline/contracts";
 import { findSessionCommits } from "./commit-links";
+import { createGitHubActivitySync, readGitHubRepository } from "./github-activity";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin, tidelineWebOrigin } from "./login";
 import { readRepository } from "./repository";
+import { createRepositoryInstructionSync } from "./repository-instructions";
 import { redactConversationText } from "./session-safety";
 import type { LiveSession, SessionCandidate } from "./session-jsonl";
 import { openSetupConnection } from "./setup-connection";
 import type { SetupConnection } from "./setup-connection";
 import { openCollectorStorage, readBackgroundStatus, startBackgroundSync, stopBackgroundSync } from "./sync-background";
+import { syncAutostart } from "./sync-autostart";
+import { createSessionInventory } from "./sync-inventory";
 import { chooseProjects, createApprovedScope, explicitProjects, historyStart, sameCheckout, terminalText } from "./sync-projects";
-import { configuredAgentRoots, databaseSources, databaseVersion, fileSources, isInaccessible, isWithin, readPhysicalDirectory, sessionFiles } from "./sync-sources";
+import { configuredAgentRoots, createCodexSubagentIndex, databaseSources, databaseVersion, fileSources, isInaccessible, isWithin, readPhysicalDirectory, sessionFiles } from "./sync-sources";
 import {
   backgroundStartupTimeout,
   deleteSyncCredential,
@@ -32,14 +37,21 @@ import {
   SyncSetupMissingError,
 } from "./sync-storage";
 import type { SyncConfig } from "./sync-storage";
+import { watchCollectorWake } from "./sync-wake";
 
 type SetupOptions = {
   workspace?: string;
   project?: string[];
   history?: boolean;
   background?: boolean;
+  hooks?: boolean;
   conversations?: boolean;
   sessionDetails?: boolean;
+  fullTranscripts?: boolean;
+  subagentTranscripts?: boolean;
+  repositoryInstructions?: boolean;
+  repositoryContext?: boolean;
+  githubActivity?: boolean;
   browser: boolean;
   credentialFile?: boolean;
   onboarding?: boolean;
@@ -58,7 +70,7 @@ async function readCurrentSetup() {
   });
   if (!storage) return;
   try {
-    return storage.config();
+    return { config: storage.config(), received: storage.receivedSessionKeys() };
   } finally {
     storage.close();
   }
@@ -109,7 +121,8 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     throw new Error("Set --workspace to the destination workspace UUID.");
   }
   if (process.platform === "win32") throw new Error("Tideline automatic sync currently requires macOS or Linux.");
-  const previous = await readCurrentSetup();
+  const existingSetup = await readCurrentSetup();
+  const previous = existingSetup?.config;
   const apiOrigin = tidelineApiOrigin();
   const webOrigin = options.onboarding ? tidelineWebOrigin() : undefined;
   if (!options.workspace && !previous) {
@@ -136,9 +149,13 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   const selection = options.project?.length ? {
     projects: await explicitProjects(options.project), history: options.history ?? false, background: options.background ?? false,
     sessionDetails: options.sessionDetails ?? previous?.sessionDetails ?? false,
+    subagentTranscripts: options.subagentTranscripts ?? previous?.subagentTranscripts ?? false,
   } : await chooseProjects(roots, previous?.projects ?? [], {
     ...options,
+    fullTranscripts: options.fullTranscripts ?? previous?.fullTranscripts,
     previousSessionDetails: previous?.sessionDetails,
+    previousSubagentTranscripts: previous?.subagentTranscripts,
+    received: existingSetup?.received,
     allowEmpty: Boolean(previous) && !connection,
     onDiscovered: connection && (async (repositoriesFound, localSessionsFound) => {
       await connection.update({ phase: "choosing", repositoriesFound, localSessionsFound });
@@ -149,6 +166,13 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     console.info("Setup canceled.");
     return;
   }
+  const fullTranscripts = (options.fullTranscripts ?? previous?.fullTranscripts) || undefined;
+  const repositoryInstructions = (options.repositoryInstructions ?? previous?.repositoryInstructions) || undefined;
+  const repositoryContext = (options.repositoryContext ?? previous?.repositoryContext) || undefined;
+  if (options.subagentTranscripts && !selection.sessionDetails) {
+    throw new Error("Enable --session-details to include subagent conversations.");
+  }
+  const subagentTranscripts = (selection.sessionDetails && selection.subagentTranscripts) || undefined;
   let approvedToken: string | undefined;
   if (connection) {
     if (!await connection.update({ phase: "approving", checkoutsSelected: selection.projects.length, history: selection.history })) {
@@ -169,12 +193,22 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     if (JSON.stringify(storage.config()) !== JSON.stringify(previous)) throw new Error("Sync setup changed. Run tideline sync setup again.");
     const now = new Date().toISOString();
     const retained = previous?.projects.filter((prior) => selection.projects.some((project) => sameCheckout(prior, project))) ?? [];
-    const sinceByPath = new Map(retained.map((project) => [project.directory, project.since]));
-    const projects = selection.projects.map((project) => ({ ...project, since: selection.history ? historyStart : sinceByPath.get(project.directory) ?? now }));
+    const retainedByPath = new Map(retained.map((project) => [project.directory, project]));
+    const projects = await Promise.all(selection.projects.map(async (project) => {
+      const retained = retainedByPath.get(project.directory);
+      const githubRepository = options.githubActivity === undefined ? retained?.githubRepository :
+        options.githubActivity && project.git ? await readGitHubRepository(project.directory) : undefined;
+      return { ...project, since: selection.history ? historyStart : retained?.since ?? now, githubRepository };
+    }));
     if (previous) {
       const removed = previous.projects.filter((prior) => !retained.includes(prior));
-      storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot, sessionDetails: selection.sessionDetails || undefined }, removed);
+      storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot, sessionDetails: selection.sessionDetails || undefined,
+        repositoryInstructions, repositoryContext, fullTranscripts, subagentTranscripts }, removed);
       workspaceId = previous.workspaceId;
+      if (!projects.length) {
+        const token = await loadActiveSyncToken(storage, previous).catch(() => null);
+        if (token) await createSessionInventory({ ...previous, projects })(token, AbortSignal.timeout(4_000));
+      }
     } else {
       const sources = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"], sessionSourceLabel.cursor];
       if (roots.openCodeRoot) sources.push(sessionSourceLabel.opencode);
@@ -188,6 +222,8 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
         codexRoot: roots.codexRoot, codexArchiveRoot: roots.codexArchiveRoot,
         claudeRoot: roots.claudeRoot, cursorRoot: roots.cursorRoot, openCodeRoot: roots.openCodeRoot,
         sessionDetails: selection.sessionDetails || undefined,
+        subagentTranscripts,
+        repositoryInstructions, repositoryContext, fullTranscripts,
       }, approvedToken);
     }
   } finally {
@@ -198,6 +234,17 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     return;
   }
   if (selection.sessionDetails) console.info("Session details are enabled for Codex and Claude Code.");
+  if (options.hooks) {
+    const { configureNativeHooks } = await import("./native-hooks");
+    await configureNativeHooks("install").catch((error: unknown) => {
+      console.warn(`Hooks could not be installed. Sync can still run. ${error instanceof Error ? error.message : "Run tideline hooks install to retry."}`);
+    });
+  }
+  if (subagentTranscripts) console.info("Redacted subagent conversations are enabled for Codex and Claude Code.");
+  if (fullTranscripts) console.info("Full transcripts and recorded image attachments are enabled for Codex and Claude Code.");
+  if (repositoryInstructions) console.info("Redacted repository instruction snapshots are enabled for the selected Git checkouts.");
+  if (repositoryContext) console.info("Repository context is enabled for selected Git checkouts. Skill and agent text is redacted. Configs and skill resources include file metadata.");
+  if (options.githubActivity) console.info("GitHub activity is enabled for selected checkouts with a github.com origin. Run gh auth login if needed.");
   if (selection.background) await startBackgroundSync();
   else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
   if (connection && !await connection.update({ phase: "ready", checkoutsSelected: selection.projects.length, background: selection.background })) {
@@ -211,9 +258,11 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   }
 }
 
+class SyncApprovalError extends Error {}
+
 function requireSetup(storage: Awaited<ReturnType<typeof openSyncStorage>>) {
   const config = storage.config();
-  if (!config) throw new Error("Set up Tideline sync first with tideline sync setup.");
+  if (!config) throw new SyncSetupMissingError("Set up Tideline sync first with tideline sync setup.");
   if (config.apiOrigin !== tidelineApiOrigin()) {
     throw new Error("TIDELINE_API_URL differs from the approved sync destination.");
   }
@@ -222,7 +271,16 @@ function requireSetup(storage: Awaited<ReturnType<typeof openSyncStorage>>) {
 
 type Storage = Awaited<ReturnType<typeof openSyncStorage>>;
 type SourceReader = ReturnType<typeof fileSources>[number]["read"];
-type ObservedFile = { version: string; retryAt?: number };
+type ObservedFile = {
+  version: string;
+  retryAt?: number;
+  sidecar?: NonNullable<LiveSession["sidecarRevision"]> & { reconcileAt: number };
+  rawSubagents?: LocatedSubagents;
+};
+function* observedSubagents(observed: Map<string, ObservedFile>) {
+  for (const { rawSubagents } of observed.values()) if (rawSubagents) yield rawSubagents;
+}
+const sidecarInterval = 10_000;
 type ObservedDatabase = { version: string; reconcileAt: number };
 type UploadRetry = { id: string; candidates: Set<string> };
 
@@ -235,13 +293,18 @@ async function collectNewSessions(
   storage: Storage,
   observed: Map<string, ObservedFile>,
   databases: Map<string, ObservedDatabase>,
+  codexSubagents: ReturnType<typeof createCodexSubagentIndex> | undefined,
   signal: AbortSignal,
   retry?: UploadRetry,
 ) {
   const scope = createApprovedScope(config.projects);
+  await codexSubagents?.refresh(signal);
   const options = {
     live: true as const,
     captureDetails: config.sessionDetails,
+    transcriptPreview: config.fullTranscripts,
+    captureSubagents: config.subagentTranscripts,
+    findCodexSubagent: codexSubagents?.find,
     ...scope,
     sessionAllowed: (candidate: SessionCandidate) => scope.sessionAllowed(candidate) &&
       (!retry || retry.candidates.has(sessionKey(candidate))),
@@ -319,8 +382,15 @@ async function collectNewSessions(
     const version = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
     const previous = observed.get(path);
     if (previous?.version === version && (!previous.retryAt || previous.retryAt > Date.now())) {
-      nextObserved.set(path, previous);
-      return;
+      const sidecar = previous.sidecar;
+      if (!sidecar || sidecar.reconcileAt > Date.now()) {
+        nextObserved.set(path, previous);
+        return;
+      }
+      if (await sidecar.read() === sidecar.value) {
+        nextObserved.set(path, { ...previous, sidecar: { ...sidecar, reconcileAt: Date.now() + sidecarInterval } });
+        return;
+      }
     }
 
     let result: Awaited<ReturnType<SourceReader>>;
@@ -340,7 +410,13 @@ async function collectNewSessions(
       return;
     }
 
-    nextObserved.set(path, { version, retryAt: retryProject ? Date.now() + 30_000 : undefined });
+    const sidecar = result?.sidecarRevision;
+    const streams = result?.rawSubagents;
+    const rawSubagents = streams?.length && result ? {
+      sourceSessionId: result.session.sourceSessionId, projectDirectory: result.projectDirectory, streams,
+    } : undefined;
+    nextObserved.set(path, { version, retryAt: retryProject ? Date.now() + 30_000 : undefined,
+      sidecar: sidecar && { ...sidecar, reconcileAt: Date.now() + sidecarInterval }, rawSubagents });
     if (result && await queueSession(result) === "full") {
       nextObserved.delete(path);
       return "full";
@@ -411,7 +487,7 @@ async function sendPending(storage: Storage, config: SyncConfig, token: string, 
     if (signal.aborted) return true;
     const response = await postToTideline({ apiOrigin: config.apiOrigin, path: syncRoutes.sessions, body, accessToken: token, signal });
     if (response?.status === 401 || response?.status === 403) {
-      throw new Error("Tideline sync authorization expired or was revoked. Run tideline sync revoke and set it up again.");
+      throw new SyncApprovalError("Tideline sync authorization expired or was revoked. Run tideline sync revoke and set it up again.");
     }
     if (response && [400, 404, 409, 413].includes(response.status)) {
       storage.finish(sessionKey, { phase: "failed", httpStatus: response.status }, retryId);
@@ -427,7 +503,7 @@ async function sendPending(storage: Storage, config: SyncConfig, token: string, 
 
 async function loadActiveSyncToken(storage: Storage, config: SyncConfig) {
   if (config.revoked || Date.now() >= Date.parse(config.expiresAt)) {
-    throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
+    throw new SyncApprovalError("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
   }
   return loadSyncCredential(storage.directory, config);
 }
@@ -435,6 +511,7 @@ async function loadActiveSyncToken(storage: Storage, config: SyncConfig) {
 async function attemptRetry(storage: Storage, config: SyncConfig, token: string, id: string, signal: AbortSignal) {
   let observed = new Map<string, ObservedFile>();
   const databases = new Map<string, ObservedDatabase>();
+  const codexSubagents = config.subagentTranscripts ? createCodexSubagentIndex(config) : undefined;
   let scanned = false;
   while (!signal.aborted) {
     const pending = storage.pending();
@@ -445,7 +522,7 @@ async function attemptRetry(storage: Storage, config: SyncConfig, token: string,
     if (scanned || !config.projects.length) break;
     const candidates = storage.retryCandidates(id);
     if (!candidates.size) break;
-    const scan = await collectNewSessions(config, storage, observed, databases, signal, { id, candidates });
+    const scan = await collectNewSessions(config, storage, observed, databases, codexSubagents, signal, { id, candidates });
     observed = scan.observed;
     scanned = !scan.full;
   }
@@ -496,18 +573,76 @@ export async function retrySync() {
   }
 }
 
-export async function runSync({ backgroundId }: { backgroundId?: string } = {}) {
+export async function syncOnce() {
+  const storage = await openSyncStorage({ lock: true });
+  const stopping = new AbortController();
+  const stop = () => stopping.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    const config = requireSetup(storage);
+    if (!config.projects.length) throw new Error("Choose repositories with tideline enable before starting sync.");
+    const token = await loadActiveSyncToken(storage, config);
+    let observed = new Map<string, ObservedFile>();
+    const databases = new Map<string, ObservedDatabase>();
+    const codexSubagents = config.subagentTranscripts ? createCodexSubagentIndex(config) : undefined;
+    while (!stopping.signal.aborted) {
+      const pending = storage.pending();
+      if (pending.length) {
+        if (!await sendPending(storage, config, token, stopping.signal, pending)) {
+          throw new Error("Tideline is unavailable. Uploads remain queued for the next sync or retry.");
+        }
+        if (storage.pending().length) continue;
+      }
+      const scan = await collectNewSessions(config, storage, observed, databases, codexSubagents, stopping.signal);
+      observed = scan.observed;
+      if (!scan.full && !storage.pending().length) break;
+    }
+    if (stopping.signal.aborted) throw new Error("Sync was interrupted. Run tideline sync once to continue.");
+    await createRepositoryInstructionSync(config)(token, stopping.signal);
+    await createGitHubActivitySync(config, storage)(token, stopping.signal, true);
+    await createSessionInventory(config)(token, stopping.signal).catch(() => {});
+    const transcriptResult = await createTranscriptSync(config)(token, stopping.signal, observedSubagents(observed), true);
+    if (transcriptResult?.deferredChildren) {
+      console.warn("Some subagent transcripts are waiting for session processing. Run tideline sync once again to continue.");
+    }
+    const counts = storage.counts();
+    const failed = counts.get("failed") ?? 0;
+    console.info(`Sync complete. Received: ${counts.get("received") ?? 0}. Failed: ${failed}.`);
+    if (failed) throw new Error("Some sessions could not sync. Run tideline sync status for details.");
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    storage.close();
+  }
+}
+
+export async function runSync({ backgroundId, autostart }: { backgroundId?: string; autostart?: boolean } = {}) {
+  try {
+    await runCollector(backgroundId, autostart);
+  } catch (error) {
+    if (!autostart || !(error instanceof SyncApprovalError || error instanceof SyncSetupMissingError)) throw error;
+    console.warn(error.message);
+  }
+}
+
+async function runCollector(backgroundId?: string, autostart = false) {
   const storage = await openCollectorStorage(backgroundId);
   const stopping = new AbortController();
+  const wake = watchCollectorWake(storage.directory);
   const stop = () => stopping.abort();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   let exitPhase: "stopped" | "failed" = "failed";
   let monitor: ReturnType<typeof setInterval> | undefined;
+  let githubTask: Promise<void> | undefined;
   try {
     if (!backgroundId && !storage.prepareForeground()) throw new Error("Background sync is starting. Check tideline sync status.");
     const config = requireSetup(storage);
-    if (!config.projects.length) throw new Error("Choose repositories with tideline enable before starting sync.");
+    if (!config.projects.length) {
+      if (autostart) return;
+      throw new Error("Choose repositories with tideline enable before starting sync.");
+    }
     const token = await loadActiveSyncToken(storage, config);
     if (backgroundId) {
       if (!storage.activateBackground(backgroundId)) return;
@@ -521,6 +656,7 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
     console.info(`Watching new sessions from ${names.join(", ")}. Press Ctrl+C to stop.`);
     let observed = new Map<string, ObservedFile>();
     const databases = new Map<string, ObservedDatabase>();
+    const codexSubagents = config.subagentTranscripts ? createCodexSubagentIndex(config) : undefined;
     let nextRetryAt = 0;
     let retryDelay = 2_000;
     let observedRetry: string | undefined;
@@ -528,9 +664,15 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
     let queueFull = false;
     let inaccessible = false;
     let unavailableProjects = new Set<string>();
+    const syncInstructions = createRepositoryInstructionSync(config);
+    const syncGitHubActivity = createGitHubActivitySync(config, storage);
+    const syncInventory = createSessionInventory(config);
+    const syncTranscripts = createTranscriptSync(config);
+    let transcriptTask: Promise<void> | undefined;
+    let inventoryTask: Promise<void> | undefined;
     while (!stopping.signal.aborted) {
       if (Date.now() >= Date.parse(config.expiresAt)) {
-        throw new Error("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
+        throw new SyncApprovalError("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
       }
 
       const missing = await Promise.all(config.projects.map(async ({ directory }) =>
@@ -544,7 +686,7 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
         databases.clear();
       }
       unavailableProjects = unavailable;
-      const scan = await collectNewSessions(config, storage, observed, databases, stopping.signal);
+      const scan = await collectNewSessions(config, storage, observed, databases, codexSubagents, stopping.signal);
       observed = scan.observed;
       if (scan.full && !queueFull) console.warn("The local queue is full. Discovery will catch up from the agent files once uploads resume.");
       queueFull = scan.full;
@@ -559,6 +701,15 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
           ? await attemptRetry(storage, config, token, requested, stopping.signal) !== "offline"
           : await sendPending(storage, config, token, stopping.signal);
         if (reachable) {
+          await syncInstructions(token, stopping.signal);
+          transcriptTask ??= syncTranscripts(token, stopping.signal, observedSubagents(observed))
+            .then(() => {}, () => {
+              if (!stopping.signal.aborted) console.warn("Transcript archives could not sync. Tideline will retry.");
+            }).finally(() => { transcriptTask = undefined; });
+          githubTask ??= syncGitHubActivity(token, stopping.signal).catch(() => {
+            if (!stopping.signal.aborted) console.warn("GitHub activity could not sync.");
+          }).finally(() => { githubTask = undefined; });
+          inventoryTask ??= syncInventory(token, stopping.signal).catch(() => {}).finally(() => { inventoryTask = undefined; });
           if (offline) console.info("Tideline is reachable. Resuming uploads.");
           offline = false;
           retryDelay = 2_000;
@@ -570,10 +721,13 @@ export async function runSync({ backgroundId }: { backgroundId?: string } = {}) 
         }
       }
 
-      await delay(2_000, undefined, { signal: stopping.signal }).catch(() => {});
+      await wake.wait(stopping.signal);
     }
     exitPhase = "stopped";
   } finally {
+    stopping.abort();
+    wake.close();
+    await githubTask;
     if (monitor) clearInterval(monitor);
     if (backgroundId) storage.finishBackground(backgroundId, exitPhase);
     process.off("SIGINT", stop);
@@ -588,11 +742,16 @@ export async function syncStatus() {
     const config = requireSetup(storage);
     const counts = storage.counts();
     console.info(`Workspace: ${config.workspaceId} at ${config.apiOrigin}`);
-    for (const { directory, since } of config.projects) {
-      console.info(`Project: ${terminalText(directory)} (${since === historyStart ? "includes older sessions" : `new sessions since ${since}`})`);
+    for (const { directory, since, githubRepository } of config.projects) {
+      const history = since === historyStart ? "includes older sessions" : `new sessions since ${since}`;
+      console.info(`Project: ${terminalText(directory)} (${history}${githubRepository ? ", GitHub activity on" : ""})`);
     }
     console.info(`Background sync: ${await readBackgroundStatus(storage)}.`);
+    console.info(`Full transcripts and images: ${config.fullTranscripts ? "on" : "off"}.`);
     console.info(`Session details: ${config.sessionDetails ? "on for Codex and Claude Code" : "off"}.`);
+    console.info(`Subagent transcripts: ${config.subagentTranscripts ? "on for Codex and Claude Code" : "off"}.`);
+    console.info(`Repository instruction snapshots: ${config.repositoryInstructions ? "on" : "off"}.`);
+    console.info(`Expanded repository context: ${config.repositoryContext ? "on" : "off"}.`);
     if (!config.cursorRoot) {
       console.info("To include Cursor and OpenCode, run tideline sync revoke, then set up sync again.");
     }
@@ -608,6 +767,7 @@ export async function syncStatus() {
 
 export async function revokeSync() {
   await stopBackgroundSync({ quiet: true });
+  await syncAutostart()?.disable();
   const storage = await openSyncStorage({ lock: true });
   try {
     if (!storage.config()) {

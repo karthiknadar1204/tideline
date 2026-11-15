@@ -1,6 +1,6 @@
-import { savedReportPage, saveReportRequest, workspaceResponse } from "@tideline/contracts";
+import { linkSavedReportSessionRequest, savedReportPage, saveReportRequest, workspaceResponse } from "@tideline/contracts";
 import type { createSavedReportStore } from "@tideline/db/reports";
-import type { Hono, MiddlewareHandler } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WorkspaceContext } from "./workspace-routes";
 
@@ -41,15 +41,37 @@ export function registerSavedReportRoutes(
     return removed ? context.body(null, 204) : context.json({ error: "Report not found." }, 404);
   });
 
-  routes.post(`/cli${reportListPath}`, requireCliAccount, bodyLimit({ maxSize: 131_072 }), async (context) => {
+  async function save(context: Context<WorkspaceContext, typeof reportListPath>, userId: string) {
     const workspaceId = uuid.safeParse(context.req.param("workspaceId"));
     if (!workspaceId.success) return context.json({ error: "Workspace not found." }, 404);
     const draft = saveReportRequest.safeParse(await context.req.json().catch(() => null));
     if (!draft.success) return context.json({ error: "Provide a title, Markdown, and valid session references." }, 400);
 
-    const result = await reports.save({ workspaceId: workspaceId.data, userId: context.get("cliAccount").userId }, draft.data);
+    const result = await reports.save({ workspaceId: workspaceId.data, userId }, draft.data);
     if (result.kind === "saved") return context.json(result.report, result.created ? 201 : 200);
     if (result.kind === "invalid-sessions") return context.json({ error: "Cited sessions must be ready in this workspace." }, 400);
     return context.json({ error: "Workspace not found." }, 404);
+  }
+
+  const limitReportBody = bodyLimit({ maxSize: 131_072 });
+  routes.post(reportListPath, limitReportBody, (context) => save(context, context.get("userId")));
+  routes.post(`/cli${reportListPath}`, requireCliAccount, limitReportBody, (context) => save(context, context.get("cliAccount").userId));
+
+  routes.post(`/cli${reportDetailPath}/sessions`, requireCliAccount, bodyLimit({ maxSize: 1024 }), async (context) => {
+    const workspaceId = uuid.safeParse(context.req.param("workspaceId"));
+    const reportId = uuid.safeParse(context.req.param("reportId"));
+    if (!workspaceId.success || !reportId.success) return context.json({ error: "Report not found." }, 404);
+    const reference = linkSavedReportSessionRequest.safeParse(await context.req.json().catch(() => null));
+    if (!reference.success) return context.json({ error: "Provide a valid session ID and optional agent source." }, 400);
+
+    const access = { workspaceId: workspaceId.data, userId: context.get("cliAccount").userId };
+    const result = await reports.linkSession(access, reportId.data, reference.data);
+    switch (result.kind) {
+      case "found": return context.json(result.result);
+      case "report-unavailable": return context.json({ error: "Report not found." }, 404);
+      case "session-unavailable": return context.json({ error: "The session is not ready in this workspace." }, 422);
+      case "ambiguous": return context.json({ error: "Specify the agent source for this session ID." }, 409);
+      case "limit": return context.json({ error: "This report already has the maximum number of session references." }, 400);
+    }
   });
 }

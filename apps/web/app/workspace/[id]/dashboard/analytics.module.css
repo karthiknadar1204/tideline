@@ -75,7 +75,7 @@
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border-bottom: 1px solid var(--workspace-border);
 }
 
@@ -88,6 +88,7 @@
   padding: .95rem 1rem;
   color: var(--workspace-muted);
   font-size: .76rem;
+  overflow-wrap: anywhere;
 }
 
 .metric + .metric {
@@ -351,6 +352,69 @@
   background: var(--workspace-subtle);
 }
 
+.memberMetric {
+  color: var(--workspace-muted);
+  font-size: .78rem;
+}
+
+.memberUsage {
+  display: grid;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.memberUsage li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(4rem, auto);
+  align-items: center;
+  gap: .7rem 1.25rem;
+  padding: .6rem 1rem;
+  border-top: 1px solid var(--workspace-border);
+  font-size: .8rem;
+}
+
+.memberUsage li > :first-child {
+  overflow-wrap: anywhere;
+}
+
+.memberUsage a {
+  color: var(--workspace-accent);
+  text-underline-offset: 3px;
+}
+
+.memberUsage a:hover {
+  text-decoration: underline;
+}
+
+.memberUsage strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+}
+
+.memberUsage small {
+  display: block;
+  color: var(--workspace-muted);
+  font-size: .66rem;
+  font-weight: normal;
+}
+
+.memberTrack {
+  height: .35rem;
+  border-radius: .2rem;
+  background: var(--workspace-subtle);
+}
+
+.memberBar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--workspace-accent);
+}
+
+.memberBar[data-complete="false"] {
+  opacity: .55;
+}
+
 .back {
   color: var(--workspace-muted);
   font-size: .78rem;
@@ -363,7 +427,8 @@
 
 .tabs {
   display: flex;
-  gap: 1.15rem;
+  flex-wrap: wrap;
+  gap: .15rem 1.15rem;
   border-bottom: 1px solid var(--workspace-border);
   color: var(--workspace-muted);
   font-size: .83rem;
@@ -438,10 +503,6 @@
     border-left: 0;
   }
 
-  .metric:last-child {
-    grid-column: span 2;
-  }
-
   .plotPanel {
     padding: .85rem .75rem;
   }
@@ -449,5 +510,15 @@
   .table th,
   .table td {
     padding: .5rem .6rem;
+  }
+
+  .memberUsage li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: .35rem .75rem;
+  }
+
+  .memberTrack {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 }

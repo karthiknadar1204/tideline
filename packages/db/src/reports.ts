@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { SAVED_REPORT_PAGE_SIZE } from "@tideline/contracts";
-import type { SaveReportRequest, SavedReportDetail, SavedReportList, SavedReportSummary } from "@tideline/contracts";
+import { MAX_REPORT_SESSION_REFERENCES, SAVED_REPORT_PAGE_SIZE } from "@tideline/contracts";
+import type { LinkSavedReportSessionRequest, LinkSavedReportSessionResponse, SaveReportRequest, SavedReportDetail, SavedReportList, SavedReportSummary } from "@tideline/contracts";
 import { and, desc, eq, gt, inArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -11,6 +11,9 @@ type ReportAccess = { workspaceId: string; userId: string };
 type SaveResult =
   | { kind: "saved"; report: SavedReportSummary; created: boolean }
   | { kind: "inaccessible" | "invalid-sessions" };
+type LinkResult =
+  | { kind: "found"; result: LinkSavedReportSessionResponse }
+  | { kind: "report-unavailable" | "session-unavailable" | "ambiguous" | "limit" };
 
 const summaryFields = {
   id: savedReports.id,
@@ -93,6 +96,35 @@ export function createSavedReportStore(databaseUrl: string) {
           eq(savedReports.workspaceId, workspace.id), eq(savedReports.authorId, access.userId), eq(savedReports.id, reportId),
         )).returning({ id: savedReports.id });
         return Boolean(removed);
+      });
+    },
+
+    async linkSession(access: ReportAccess, reportId: string, reference: LinkSavedReportSessionRequest): Promise<LinkResult> {
+      return db.transaction(async (transaction) => {
+        const workspace = await lockWorkspace(transaction, access);
+        if (!workspace?.role) return { kind: "report-unavailable" };
+        const ownReport = and(eq(savedReports.workspaceId, workspace.id), eq(savedReports.authorId, access.userId), eq(savedReports.id, reportId));
+        const [report] = await transaction.select(summaryFields).from(savedReports).where(ownReport);
+        if (!report) return { kind: "report-unavailable" };
+
+        const ready = and(eq(agentSessions.workspaceId, workspace.id), gt(agentSessions.readyMessageCount, 0));
+        const sources = eq(agentSessions.sourceSessionId, reference.sessionId);
+        const matches = await transaction.select({ id: agentSessions.id }).from(agentSessions).where(and(ready,
+          reference.source ? and(eq(agentSessions.source, reference.source), sources) : or(eq(agentSessions.id, reference.sessionId), sources),
+        ));
+        const direct = reference.source === undefined ? matches.find(({ id }) => id === reference.sessionId) : undefined;
+        if (!direct && matches.length > 1) return { kind: "ambiguous" };
+        const sessionId = (direct ?? matches[0])?.id;
+        if (sessionId && report.sessionIds.includes(sessionId)) {
+          return { kind: "found", result: { report: summarize(report, access.userId), sessionId, linked: false } };
+        }
+        if (report.sessionIds.length >= MAX_REPORT_SESSION_REFERENCES) return { kind: "limit" };
+        if (!sessionId) return { kind: "session-unavailable" };
+
+        // Keep the original save fingerprint so replaying that save returns this report and its new citations.
+        const sessionIds = [...report.sessionIds, sessionId];
+        await transaction.update(savedReports).set({ sessionIds }).where(ownReport);
+        return { kind: "found", result: { report: summarize({ ...report, sessionIds }, access.userId), sessionId, linked: true } };
       });
     },
 

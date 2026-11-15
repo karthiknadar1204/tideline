@@ -2,15 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { normalizeWorkspacePath } from "../../../../lib/workspace-path";
 
-export function SettingsNav({ workspaceId, team }: { workspaceId: string; team: boolean }) {
+export function SettingsNav({ workspaceId, team, owner }: { workspaceId: string; team: boolean; owner: boolean }) {
   const base = `/workspace/${workspaceId}`;
-  const pathname = usePathname();
+  const pathname = normalizeWorkspacePath(usePathname(), workspaceId);
   const sections = [
     { href: `${base}/settings`, label: "General" },
+    { href: `${base}/settings/account`, label: "Account" },
     { href: `${base}/settings/uploads`, label: "Uploads" },
     { href: `${base}/settings/usage`, label: "Usage limits" },
     { href: `${base}/settings/integrations`, label: "Integrations" },
+    ...(owner ? [
+      { href: `${base}/settings/digest`, label: "Digests" },
+      { href: `${base}/settings/billing`, label: "Billing" },
+    ] : []),
     { href: `${base}/reports/saved`, label: "Saved reports" },
     ...(team ? [{ href: `${base}/members`, label: "Members" }] : []),
   ];

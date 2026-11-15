@@ -2,7 +2,13 @@
   "name": "@tideline/contracts",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./usage": "./src/usage.ts",
+    "./transcripts": "./src/transcripts.ts",
+    "./redaction": "./src/redaction.ts",
+    "./digest": "./src/digest.ts"
+  },
   "scripts": {
     "check-types": "tsc --noEmit"
   },

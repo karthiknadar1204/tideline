@@ -119,6 +119,28 @@ export async function openCliAccount({ workspace }: { workspace?: string } = {})
     async get<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal) {
       return checkedResponse(await requestAccount(stored, "GET", path, { signal }), schema);
     },
+    async download(path: string, maximumBytes: number) {
+      const response = await requestAccount(stored, "GET", path);
+      if (!response?.ok || !response.body) throw new Error("A transcript attachment could not be downloaded.");
+      const reader = response.body.getReader();
+      let size = 0;
+      const chunks: Uint8Array[] = [];
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > maximumBytes) {
+            await reader.cancel();
+            throw new Error("A transcript attachment exceeded its recorded size.");
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return Buffer.concat(chunks);
+    },
     async post<T>(path: string, body: unknown, schema: z.ZodType<T>, signal?: AbortSignal) {
       return checkedResponse(await requestAccount(stored, "POST", path, { body: JSON.stringify(body), signal }), schema);
     },

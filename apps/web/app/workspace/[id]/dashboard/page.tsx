@@ -1,9 +1,12 @@
+import { auth } from "@clerk/nextjs/server";
 import { readReportFilters } from "../../../../lib/reports";
-import { analyticsHref, analyticsSessionsHref, buildWorkspaceAnalytics, readAnalyticsMetric } from "../../../../lib/workspace-analytics";
-import { hasWorkspaceCliApproval, listWorkspaceSessions, readWorkspaceAccess } from "../../../../lib/workspace";
+import { analyticsHref, analyticsSessionsHref, buildWorkspaceAnalytics, readAnalyticsMetric, summarizeMemberMetric } from "../../../../lib/workspace-analytics";
+import { workspaceMemberLabels } from "../../../../lib/workspace-members";
+import { hasWorkspaceCliApproval, listWorkspaceInsightSessions, readWorkspaceAccess, readWorkspaceTeam } from "../../../../lib/workspace";
 import { FirstSessionSetup } from "../first-session-setup";
 import { AnalyticsControls } from "./analytics-controls";
-import { AnalyticsSeries, UsageTable } from "./analytics";
+import { GitHubSummary } from "./github-summary";
+import { AnalyticsSeries, MemberUsage, UsageTable } from "./analytics";
 import styles from "./analytics.module.css";
 
 export default async function DashboardPage({ params, searchParams }: PageProps<"/workspace/[id]/dashboard">) {
@@ -11,9 +14,13 @@ export default async function DashboardPage({ params, searchParams }: PageProps<
   const workspace = `/workspace/${encodeURIComponent(id)}`;
   const path = `${workspace}/dashboard`;
   const repositories = `${workspace}/repositories`;
-  const sessions = await listWorkspaceSessions(id);
+  const access = await readWorkspaceAccess(id);
+  const [sessions, teamData] = await Promise.all([
+    listWorkspaceInsightSessions(id),
+    access.kind === "team" ? Promise.all([readWorkspaceTeam(id), auth()]) : undefined,
+  ]);
   if (!sessions.length) {
-    const [access, approved] = await Promise.all([readWorkspaceAccess(id), hasWorkspaceCliApproval(id)]);
+    const approved = await hasWorkspaceCliApproval(id);
     return <main className={styles.page}><FirstSessionSetup workspace={access} approved={approved} /></main>;
   }
 
@@ -21,6 +28,11 @@ export default async function DashboardPage({ params, searchParams }: PageProps<
   const filters = readReportFilters(query, now);
   const metric = readAnalyticsMetric(query.metric);
   const report = buildWorkspaceAnalytics(sessions, filters);
+  const memberRows = teamData && summarizeMemberMetric(
+    report.sessions,
+    workspaceMemberLabels(teamData[0].members, teamData[1].userId),
+    metric,
+  );
 
   return (
     <main className={styles.page}>
@@ -30,6 +42,12 @@ export default async function DashboardPage({ params, searchParams }: PageProps<
       </header>
 
       <AnalyticsSeries path={path} workspaceId={id} metric={metric} filters={filters} report={report} />
+
+      <GitHubSummary workspaceId={id} filters={filters} />
+
+      {memberRows && (
+        <MemberUsage rows={memberRows} metric={metric} workspaceId={id} filters={filters} firstDay={report.firstDay} />
+      )}
 
       <div className={styles.breakdowns}>
         <UsageTable title="Repositories" rows={report.repositories.slice(0, 6)}

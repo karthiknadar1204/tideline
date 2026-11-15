@@ -16,10 +16,8 @@
   font-family: Workspace Geist, system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  .shell {
-    --rail-bg: #17201c;
-  }
+:global(html[data-theme="dark"]) .shell {
+  --rail-bg: #17201c;
 }
 
 .skip {

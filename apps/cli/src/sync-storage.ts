@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import { syncEnrollmentResponse } from "@tideline/contracts";
+import { githubActivityUpload, syncEnrollmentResponse } from "@tideline/contracts";
 import { z } from "zod";
 
 const execute = promisify(execFile);
@@ -17,6 +17,7 @@ const approvedProjectSchema = z.strictObject({
   directory: z.string().min(1),
   since: z.iso.datetime(),
   git: z.strictObject({ root: z.string().min(1), common: z.string().min(1) }).nullable().optional(),
+  githubRepository: githubActivityUpload.shape.repository.optional(),
 });
 
 const sharedConfig = z.strictObject({
@@ -33,6 +34,10 @@ const sharedConfig = z.strictObject({
   cursorRoot: z.string().min(1).optional(),
   openCodeRoot: z.string().min(1).optional(),
   sessionDetails: z.boolean().optional(),
+  fullTranscripts: z.boolean().optional(),
+  subagentTranscripts: z.boolean().optional(),
+  repositoryInstructions: z.boolean().optional(),
+  repositoryContext: z.boolean().optional(),
   revoked: z.boolean().optional(),
 });
 
@@ -40,7 +45,7 @@ const configSchema = z.union([
   sharedConfig.extend({ projects: z.array(approvedProjectSchema) }),
   sharedConfig.extend({ projectDirectory: z.string().min(1) }).transform(({ projectDirectory, ...config }) => ({
     ...config,
-    projects: [{ directory: projectDirectory, since: config.startedAt }],
+    projects: [{ directory: projectDirectory, since: config.startedAt, githubRepository: undefined }],
   })),
 ]);
 
@@ -92,8 +97,12 @@ export async function openPrivateDatabase(directory: string, name: string, creat
   return new DatabaseSync(file);
 }
 
+export function syncDirectoryPath() {
+  return resolve(process.env.TIDELINE_SYNC_HOME ?? join(homedir(), ".tideline"));
+}
+
 export async function ensureSyncDirectory(create: boolean) {
-  const directory = resolve(process.env.TIDELINE_SYNC_HOME ?? join(homedir(), ".tideline"));
+  const directory = syncDirectoryPath();
   if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
   try {
     await checkPrivatePath(directory, "directory");
@@ -148,6 +157,13 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         phase TEXT NOT NULL CHECK (phase IN ('queued', 'received', 'failed')),
         body TEXT,
         queued_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS github_collection (
+        account TEXT NOT NULL,
+        repository TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        checked_at INTEGER NOT NULL,
+        PRIMARY KEY (account, repository)
       );
     `);
     if (writer && !db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'projection'").get()) {
@@ -226,6 +242,19 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     saveConfig(config: SyncConfig) {
       db.prepare("INSERT INTO config (id, value) VALUES (1, ?)").run(JSON.stringify(config));
     },
+    githubCollection(account: string, repository: string) {
+      const row = db.prepare("SELECT fingerprint, checked_at AS checkedAt FROM github_collection WHERE account = ? AND repository = ?")
+        .get(account, repository);
+      if (typeof row?.fingerprint === "string" && typeof row.checkedAt === "number") {
+        return { fingerprint: row.fingerprint, checkedAt: row.checkedAt };
+      }
+    },
+    markGitHubCollection(account: string, repository: string, fingerprint: string, checkedAt: number) {
+      db.prepare(`
+        INSERT INTO github_collection (account, repository, fingerprint, checked_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT (account, repository) DO UPDATE SET fingerprint = excluded.fingerprint, checked_at = excluded.checked_at
+      `).run(account, repository, fingerprint, checkedAt);
+    },
     updateProjects(config: SyncConfig, removed: ApprovedProject[]) {
       db.exec("BEGIN IMMEDIATE");
       try {
@@ -236,6 +265,8 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
         }
         if (!config.sessionDetails) {
           db.exec("DELETE FROM uploads WHERE phase = 'queued' AND json_type(body, '$.session.capture') IS NOT NULL");
+        } else if (!config.subagentTranscripts) {
+          db.exec("DELETE FROM uploads WHERE phase = 'queued' AND json_type(body, '$.session.capture.subagents') IS NOT NULL");
         }
         db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify(config));
         db.exec("COMMIT");
@@ -309,6 +340,9 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       const rows = db.prepare("SELECT phase, count(*) AS count FROM uploads GROUP BY phase").all();
       return new Map(rows.map((row) => [String(row.phase), Number(row.count)]));
     },
+    receivedSessionKeys() {
+      return new Set(db.prepare("SELECT session_key FROM uploads WHERE phase = 'received'").all().map(({ session_key }) => String(session_key)));
+    },
     failureCounts() {
       const migrated = db.prepare("SELECT 1 FROM pragma_table_info('uploads') WHERE name = 'http_status'").get();
       const status = migrated ? "http_status" : "NULL";
@@ -321,7 +355,7 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
       db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify({ ...config, revoked: true }));
     },
     clear() {
-      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; DELETE FROM background; DELETE FROM retry_request; COMMIT;");
+      db.exec("BEGIN; DELETE FROM uploads; DELETE FROM config; DELETE FROM background; DELETE FROM retry_request; DELETE FROM github_collection; COMMIT;");
     },
     close() {
       db.close();

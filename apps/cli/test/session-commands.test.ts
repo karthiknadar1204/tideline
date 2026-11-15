@@ -38,15 +38,40 @@ test("pull, count, and SQL use scoped data and local exports remain readable wit
   const token = `tdcli_${"0".repeat(64)}`;
   const sessions = [
     fixture("codex", "Fix the parser", "alpha", "2026-11-13"),
-    fixture("opencode", "Fix the index", "alpha", "2026-11-14"),
+    fixture("claude-code", "Fix the index", "alpha", "2026-11-14"),
     fixture("cursor", "Inspect the editor", "beta", "2026-11-14"),
   ];
+  const capture = {
+    throughLine: 4, truncated: false,
+    tools: [{ line: 4, index: 0, input: "npm test", output: "2 checks passed", truncated: false }],
+    files: [{ line: 4, index: 0, path: "src/parser.ts", previousPath: null, change: "modified", diff: "-old\n+new", truncated: false }],
+    setup: { branch: "fix/parser" },
+  };
+  const childCapture = {
+    throughLine: 4, truncated: false, tools: [], files: [], setup: {},
+    subagents: { source: "claude-code-sidecar", truncated: false, transcripts: [{
+      line: 4, index: 0, agentId: "fixture-child", throughLine: 1, truncated: false,
+      messages: [{ line: 1, role: "assistant", timestamp: "2026-11-14T12:00:00.000Z", text: "Child found an issue" }],
+    }] },
+  };
+  sessions[0].activity = {
+    truncated: false, tools: [{ line: 4, index: 0, name: "shell", status: "returned" }],
+    skills: [], children: [{ line: 4, index: 0, name: "reviewer", status: "completed" }],
+  };
   const reads: URL[] = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "", "http://local/");
     reads.push(url);
     const route = `/v1/cli/workspaces/${workspace.id}/sessions`;
     if (request.headers.authorization !== `Bearer ${token}`) return void response.writeHead(401).end();
+    if (url.pathname === `/v1/cli/workspaces/${workspace.id}/github-activity`) {
+      assert.equal(url.searchParams.get("repoName")?.toLowerCase(), "alpha");
+      assert.equal(url.searchParams.get("from"), "2026-11-13");
+      response.setHeader("Content-Type", "application/json");
+      return void response.end(JSON.stringify({ counts: { merge: 0, ci: 1 }, hasMore: false, events: [{
+        repository: "team/alpha", event: { kind: "ci", id: "100", title: "Build", status: "success", at: "2026-11-14T13:00:00.000Z" },
+      }] }));
+    }
     if (url.pathname === route) {
       const rows = sessions.filter((session) => {
         const repo = url.searchParams.get("repo")?.toLowerCase();
@@ -68,7 +93,9 @@ test("pull, count, and SQL use scoped data and local exports remain readable wit
     const session = sessions.find(({ id }) => url.pathname === `${route}/${id}`);
     if (!session) return void response.writeHead(404).end();
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify(session));
+    response.end(JSON.stringify(url.searchParams.get("details") === "1" ? {
+      ...session, capture: session === sessions[0] ? capture : session === sessions[1] ? childCapture : null,
+    } : session));
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -126,7 +153,7 @@ test("pull, count, and SQL use scoped data and local exports remain readable wit
       "WITH user_text AS (SELECT * FROM messages WHERE role='user') SELECT source, text FROM user_text JOIN sessions ON sessions.id=session_id ORDER BY source; -- done",
       "--in", destination);
     assert.deepEqual(query.stdout.trimEnd().split("\n").map((line) => JSON.parse(line)), [
-      { source: "codex", text: "Fix the parser" }, { source: "opencode", text: "Fix the index" },
+      { source: "claude-code", text: "Fix the index" }, { source: "codex", text: "Fix the parser" },
     ]);
     const output = join(root, "query.csv");
     await signedOut("sql", "SELECT '=formula' AS text", "--in", destination, "--out", output);
@@ -159,8 +186,37 @@ test("pull, count, and SQL use scoped data and local exports remain readable wit
       return true;
     });
     assert.equal(reads.length, localReads, "Local count and SQL never send a request.");
-    const live = await cli("sql", "SELECT count(*) AS total FROM sessions", "--repo", "alpha", "--source", "opencode");
+    const live = await cli("sql", "SELECT count(*) AS total FROM sessions", "--repo", "alpha", "--source", "claude-code");
     assert.deepEqual(JSON.parse(live.stdout), { total: 1 });
+    const details = join(root, "details");
+    await cli("pull", "--details", "--pattern", "\\d+ checks passed", "--out", details);
+    const recorded = JSON.parse((await readFile(join(details, "calls.jsonl"), "utf8")).trim());
+    assert.equal(recorded.output, "2 checks passed");
+    assert.deepEqual(await readdir(join(details, "sessions")), [`${sessions[0].id}.jsonl`]);
+    const callCount = await cli("count", "--pattern", "\\d+ checks", "--field", "tool-output", "--unit", "call");
+    assert.equal(callCount.stdout.trim(), "1");
+    const localFiles = await signedOut("sql", "SELECT path, diff FROM file_changes", "--in", details);
+    assert.deepEqual(JSON.parse(localFiles.stdout), { path: "src/parser.ts", diff: "-old\n+new" });
+    const liveSetup = await cli("sql", "SELECT value FROM session_setup WHERE key='branch'", "--details");
+    assert.deepEqual(JSON.parse(liveSetup.stdout), { value: "fix/parser" });
+    await cli("pull", "--source", "codex");
+    const afterPull = reads.length;
+    const last = await cli("count", "--pattern", "^Fix", "--unit", "prompt");
+    assert.equal(last.stdout.trim(), "1");
+    assert.equal(reads.length, afterPull, "Regex count uses the latest default pull without reaching the API.");
+    const explicitLive = await cli("count", "--pattern", "^Fix", "--unit", "prompt", "--live");
+    assert.equal(explicitLive.stdout.trim(), "2");
+    const children = join(root, "children");
+    await cli("pull", "--details", "--pattern", "Child found", "--out", children);
+    const childMessages = await signedOut("sql", "SELECT agent_id, text FROM agent_messages", "--in", children);
+    assert.deepEqual(JSON.parse(childMessages.stdout), { agent_id: "fixture-child", text: "Child found an issue" });
+    const github = join(root, "github");
+    await cli("pull", "--github", "--repo", "ALPHA", "--from", "2026-11-13", "--out", github);
+    assert.equal((await stat(join(github, "github_activity.jsonl"))).mode & 0o077, 0);
+    const githubSql = "SELECT repository, CAST(id AS INTEGER) AS id FROM github_activity";
+    const expected = { repository: "team/alpha", id: 100 };
+    assert.deepEqual(JSON.parse((await signedOut("sql", githubSql, "--in", github)).stdout), expected);
+    assert.deepEqual(JSON.parse((await cli("sql", githubSql, "--github", "--repo", "alpha", "--from", "2026-11-13")).stdout), expected);
     assert.ok(reads.every((url) => !url.searchParams.has("query")), "The data API never receives SQL.");
   } finally {
     server.close();

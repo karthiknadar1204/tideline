@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 html {
   color-scheme: light dark;
 }
+
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 
 .tideline-workspace {
   --workspace-bg: #f7f8f7;
@@ -17,17 +22,15 @@ html {
   --workspace-button-text: #fff;
 }
 
-@media (prefers-color-scheme: dark) {
-  .tideline-workspace {
-    --workspace-bg: #141b19;
-    --workspace-panel: #19221f;
-    --workspace-border: #33423c;
-    --workspace-subtle: #222f29;
-    --workspace-text: #e7efeb;
-    --workspace-muted: #a9bcb4;
-    --workspace-accent: #a3d4c1;
-    --workspace-accent-soft: #263e34;
-    --workspace-button: #a3d4c1;
-    --workspace-button-text: #142a21;
-  }
+html[data-theme="dark"] .tideline-workspace {
+  --workspace-bg: #141b19;
+  --workspace-panel: #19221f;
+  --workspace-border: #33423c;
+  --workspace-subtle: #222f29;
+  --workspace-text: #e7efeb;
+  --workspace-muted: #a9bcb4;
+  --workspace-accent: #a3d4c1;
+  --workspace-accent-soft: #263e34;
+  --workspace-button: #a3d4c1;
+  --workspace-button-text: #142a21;
 }

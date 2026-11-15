@@ -99,7 +99,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps<"/
         <div className="min-w-0 space-y-1.5 text-xs font-medium text-[var(--workspace-muted)]">
           <label htmlFor="report-period" className="block">Period</label>
           <select id="report-period" className={control} name="days" defaultValue={String(filters.days)}>
-            {reportPeriods.map((days) => <option key={days} value={days}>{days === "all" ? "All time" : `Last ${days} days`}</option>)}
+            {reportPeriods.map((days) => <option key={days} value={days}>{days === "all" ? "All time" : days === 1 ? "One day" : `Last ${days} days`}</option>)}
           </select>
         </div>
         <div className="min-w-0 space-y-1.5 text-xs font-medium text-[var(--workspace-muted)]">

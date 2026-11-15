@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { readDay, shiftDay } from "./utc-days";
+export { readDay, shiftDay, utcDay } from "./utc-days";
 
 export const healthResponse = z.object({
   status: z.literal("ok"),
@@ -51,10 +53,48 @@ export const workspaceResponse = z.object({
 
 export type WorkspaceResponse = z.infer<typeof workspaceResponse>;
 
+export const billingSubscriptionStatus = z.enum([
+  "incomplete", "incomplete_expired", "trialing", "active", "past_due", "canceled", "unpaid", "paused",
+]);
+export const billingPriceId = z.string().regex(/^price_[A-Za-z0-9]+$/u).max(120);
+export const billingCheckoutRequest = z.strictObject({ priceId: billingPriceId });
+export const workspaceBilling = z.strictObject({
+  available: z.boolean(),
+  hasCustomer: z.boolean(),
+  pendingCheckout: z.boolean(),
+  prices: z.array(z.strictObject({
+    id: billingPriceId,
+    name: z.string().min(1).max(200),
+    interval: z.enum(["day", "week", "month", "year"]),
+    intervalCount: z.int().positive(),
+  })),
+  subscription: z.strictObject({
+    status: billingSubscriptionStatus,
+    priceId: billingPriceId,
+    cancelAtPeriodEnd: z.boolean(),
+  }).nullable(),
+});
+export const billingRedirect = z.strictObject({ url: z.url({ protocol: /^https$/u, hostname: /^(?:billing|checkout)\.stripe\.com$/u }) });
+export type BillingSubscriptionStatus = z.infer<typeof billingSubscriptionStatus>;
+
 export const workspaceNameUpdate = z.strictObject({
   name: z.string().trim().min(1).max(80).refine((name) => !/\p{Cc}/u.test(name)),
 });
 export type WorkspaceNameUpdate = z.infer<typeof workspaceNameUpdate>;
+export const confirmWorkspaceDeletion = z.strictObject({ name: z.string().min(1).max(80) });
+export const workspaceAlias = z.string().trim().toLowerCase().min(3).max(48)
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).refine((alias) => !workspaceResponse.shape.id.safeParse(alias).success);
+export const workspaceAddress = z.strictObject({ id: workspaceResponse.shape.id, alias: workspaceAlias.nullable() });
+export const workspaceAliasUpdate = z.strictObject({ alias: workspaceAlias });
+export type WorkspaceAddress = z.infer<typeof workspaceAddress>;
+export const accountDeletionStatus = z.strictObject({
+  retiring: z.boolean(),
+  ownedTeams: z.array(workspaceResponse),
+});
+export const confirmAccountDeletion = z.strictObject({ confirmation: z.literal("DELETE") });
+export const clerkOrganizationId = z.string().regex(/^org_[A-Za-z0-9]+$/).max(120);
+export const workspaceClerkDirectory = z.strictObject({ configured: z.boolean(), organizationId: clerkOrganizationId.nullable() });
+export const workspaceClerkDirectoryLink = z.strictObject({ organizationId: clerkOrganizationId });
 
 export const teamMemberRole = z.enum(["admin", "member"]);
 export const workspaceRole = z.enum(["owner", ...teamMemberRole.options]);
@@ -69,18 +109,20 @@ export const workspaceInviteAcceptance = z.strictObject({ token: z.string().rege
 export const workspaceInviteLink = workspaceInviteAcceptance.extend({ id: z.uuid() });
 export const workspaceMemberUpdate = z.strictObject({ role: teamMemberRole });
 export const workspaceTeam = z.strictObject({
-  members: z.array(z.strictObject({ userId: z.string().min(1), email: z.email().nullable(), role: workspaceRole })),
+  members: z.array(z.strictObject({ userId: z.string().min(1), email: z.email().nullable(), role: workspaceRole, directoryManaged: z.boolean().optional() })),
   invites: z.array(workspaceInviteRequest.extend({ id: z.uuid(), expiresAt: z.iso.datetime() })),
 });
 
 export type WorkspaceAccess = z.infer<typeof workspaceAccess>;
+export type WorkspaceTeam = z.infer<typeof workspaceTeam>;
 export type WorkspaceRole = z.infer<typeof workspaceRole>;
 export type TeamMemberRole = z.infer<typeof teamMemberRole>;
 
 export const savedReportVisibility = z.enum(["private", "workspace"]);
 const reportTitle = z.string().trim().min(1).max(120).refine((title) => !/\p{Cc}/u.test(title));
 const reportMarkdown = z.string().trim().min(1).max(20_000).refine((markdown) => !markdown.includes("\0"));
-const reportSessionIds = z.array(z.uuid().toLowerCase()).max(25)
+export const MAX_REPORT_SESSION_REFERENCES = 25;
+const reportSessionIds = z.array(z.uuid().toLowerCase()).max(MAX_REPORT_SESSION_REFERENCES)
   .refine((ids) => new Set(ids).size === ids.length, { message: "Session references must be unique." });
 
 export const saveReportRequest = z.strictObject({
@@ -112,16 +154,117 @@ export type SavedReportSummary = z.infer<typeof savedReportSummary>;
 export type SavedReportDetail = z.infer<typeof savedReportDetail>;
 export type SavedReportList = z.infer<typeof savedReportList>;
 
+export const digestCadence = z.enum(["weekly", "daily"]);
+export type DigestCadence = z.infer<typeof digestCadence>;
+export const digestSchedule = z.strictObject({
+  weekday: z.int().min(0).max(6),
+  hourUtc: z.int().min(0).max(23),
+  recipientIds: z.array(z.string().regex(/^user_[A-Za-z0-9]+$/).max(96)).min(1).max(25)
+    .refine((ids) => new Set(ids).size === ids.length),
+});
+export const digestSettings = z.strictObject({
+  schedule: digestSchedule.nullable(),
+  lastDeliveredAt: z.iso.datetime().nullable(),
+});
+export const digestSettingsUpdate = digestSettings.pick({ schedule: true });
+export const weeklyDigestRange = z.strictObject({
+  from: z.iso.date().refine((day) => day >= "0001-01-01"),
+  to: z.iso.date(),
+}).refine(({ from, to }) => Boolean(readDay(from) && new Date(from).getUTCDay() === 1 &&
+  from <= "9999-12-18" && shiftDay(from, 13) === to));
+export type DigestSchedule = z.infer<typeof digestSchedule>;
+
 export const MAX_CODEX_IMPORT_BYTES = 1_048_576;
+export const MAX_CLI_RELEASE_BYTES = 8 * 1024 * 1024;
+export const cliRelease = z.strictObject({
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  size: z.int().positive().max(MAX_CLI_RELEASE_BYTES),
+});
+
+const repository = z.strictObject({
+  key: z.string().regex(/^[0-9a-f]{64}$/),
+  name: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),
+});
+const githubRepositorySlug = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/u);
+const githubEventFields = {
+  id: z.union([z.string().regex(/^[1-9]\d{0,19}$/u), z.int().positive()]).transform(String),
+  title: z.string().min(1).max(240),
+  at: z.iso.datetime(),
+};
+export const githubActivityEvent = z.discriminatedUnion("kind", [
+  z.strictObject({ ...githubEventFields, kind: z.literal("merge"), status: z.literal("merged") }),
+  z.strictObject({ ...githubEventFields, kind: z.literal("ci"), status: z.string().regex(/^[a-z][a-z_]{0,31}$/u) }),
+]);
+export const githubActivityUpload = z.strictObject({
+  repository: githubRepositorySlug,
+  events: z.array(githubActivityEvent).max(200),
+}).refine(({ events }) => new Set(events.map(({ kind, id }) => `${kind}:${id}`)).size === events.length);
+export const githubActivitySyncUpload = githubActivityUpload.safeExtend({ workspaceId: workspaceResponse.shape.id });
+export const githubActivityRows = z.array(z.strictObject({ repository: githubRepositorySlug, event: githubActivityEvent })).max(1_000);
+export const githubActivityResponse = z.strictObject({
+  events: githubActivityRows,
+  counts: z.strictObject({ merge: z.int().nonnegative(), ci: z.int().nonnegative() }),
+  hasMore: z.boolean(),
+});
+export const githubActivityReceipt = z.strictObject({ received: z.int().nonnegative().max(200) });
+export const githubActivityQuery = z.strictObject({
+  repository: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
+  repoName: repository.shape.name.optional(),
+  kind: z.enum(["ci", "merge"]).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+}).refine(({ from, to }) => !from || !to || from <= to);
+export type GitHubActivityEvent = z.infer<typeof githubActivityEvent>;
+export type GitHubActivityUpload = z.infer<typeof githubActivityUpload>;
+export type GitHubActivityRows = z.infer<typeof githubActivityRows>;
+export type GitHubActivityQuery = z.infer<typeof githubActivityQuery>;
 export const MAX_CODEX_IMPORT_EVENTS = 500;
 
 export const sessionSource = z.enum(["codex", "claude-code", "cursor", "opencode"]);
+export const linkSavedReportSessionRequest = z.strictObject({
+  sessionId: z.uuid().toLowerCase(),
+  source: sessionSource.optional(),
+});
+export const linkSavedReportSessionResponse = z.strictObject({
+  report: savedReportSummary,
+  sessionId: z.uuid(),
+  linked: z.boolean(),
+});
+export type LinkSavedReportSessionRequest = z.infer<typeof linkSavedReportSessionRequest>;
+export type LinkSavedReportSessionResponse = z.infer<typeof linkSavedReportSessionResponse>;
 export const sessionSourceLabel = {
   codex: "Codex",
   "claude-code": "Claude Code",
   cursor: "Cursor",
   opencode: "OpenCode",
 } satisfies Record<z.infer<typeof sessionSource>, string>;
+
+export const MAX_INVENTORY_SESSIONS = 5_000;
+export const MAX_INVENTORY_REPOSITORIES = 1_000;
+export const syncInventoryUpload = z.strictObject({
+  workspaceId: z.uuid(),
+  version: cliRelease.shape.version,
+  partial: z.boolean(),
+  sessions: z.array(z.strictObject({ source: sessionSource, id: z.uuid(), startedAt: z.iso.datetime() })).max(MAX_INVENTORY_SESSIONS),
+  repositorySettings: z.strictObject({ complete: z.boolean(), rows: z.array(repository.extend({ enabled: z.boolean() })).max(MAX_INVENTORY_REPOSITORIES) })
+    .refine(({ rows }) => new Set(rows.map(({ key }) => key)).size === rows.length).optional(),
+}).refine(({ sessions }) => new Set(sessions.map(({ source, id }) => `${source}:${id}`)).size === sessions.length);
+export const syncInventoryUpdate = z.union([syncInventoryUpload, z.strictObject({ workspaceId: z.uuid(), clear: z.literal(true) })]);
+export const syncCoverageResponse = z.strictObject({
+  collectors: z.int().nonnegative(),
+  reportedAt: z.iso.datetime().nullable(),
+  partial: z.boolean(),
+  known: z.int().nonnegative(),
+  ready: z.int().nonnegative(),
+  pending: z.int().nonnegative(),
+});
+export type SyncInventoryUpload = z.infer<typeof syncInventoryUpload>;
+export type SyncInventoryUpdate = z.infer<typeof syncInventoryUpdate>;
+export const repositorySyncResponse = z.array(repository.extend({
+  sessions: z.int().nonnegative(),
+  state: z.enum(["enabled", "paused", "unreported"]),
+}));
 
 export const usageTargetCents = z.int().positive().max(2_000_000_000);
 const usageGoalScope = z.enum(["all", ...sessionSource.options]);
@@ -149,11 +292,6 @@ export const workspaceUsageTargetUpdate = z.discriminatedUnion("kind", [
 export type UsageGoal = z.infer<typeof usageGoal>;
 export type WorkspaceUsageTargets = z.infer<typeof workspaceUsageTargets>;
 export type WorkspaceUsageTargetUpdate = z.infer<typeof workspaceUsageTargetUpdate>;
-
-const repository = z.strictObject({
-  key: z.string().regex(/^[0-9a-f]{64}$/),
-  name: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),
-});
 
 export const modelId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/);
 const tokenCount = z.int().nonnegative().max(1_000_000_000_000);
@@ -192,6 +330,11 @@ const activityLocation = z.strictObject({ line: z.int().positive(), index: z.int
 export const MAX_SESSION_CAPTURE_BYTES = 512 * 1024;
 export const MAX_SESSION_CAPTURE_TEXT = 96 * 1024;
 export const MAX_SESSION_CAPTURE_FILES = 250;
+export const MAX_SESSION_SUBAGENT_BYTES = 96 * 1024;
+export const MAX_SESSION_SUBAGENTS = 10;
+export const MAX_SUBAGENT_DEPTH = 4;
+export const MAX_SUBAGENT_TRANSCRIPT_BYTES = 8 * 1024;
+export const MAX_SUBAGENT_MESSAGES = 40;
 
 const captureText = z.string().max(MAX_SESSION_CAPTURE_TEXT).refine((text) => !/[\0\uD800-\uDFFF]/u.test(text));
 const setupValue = z.string().min(1).max(180).refine((text) => !/[\u0000-\u001f\u007f\uD800-\uDFFF]/u.test(text));
@@ -200,6 +343,44 @@ const capturePath = z.string().min(1).max(512).refine((path) => (
   !/^[A-Za-z]:/u.test(path) &&
   path.split("/").every((part) => part && part !== ".." && part !== ".")
 ), { message: "Use a repository-relative path." });
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+export const claudeSubagentId = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u);
+const subagentStatus = z.enum(["started", "running", "completed", "failed", "stopped", "unknown"]);
+const sessionSubagent = activityLocation.extend({
+  agentId: claudeSubagentId,
+  parentAgentId: claudeSubagentId.optional(),
+  name: activityName.nullable().optional(),
+  status: subagentStatus.optional(),
+  throughLine: z.int().positive(),
+  truncated: z.boolean(),
+  messages: z.array(z.strictObject({
+    line: z.int().positive(),
+    role: z.enum(["user", "assistant"]),
+    text: captureText.min(1).max(MAX_SUBAGENT_TRANSCRIPT_BYTES),
+    timestamp: z.iso.datetime(),
+  })).max(MAX_SUBAGENT_MESSAGES),
+}).refine(({ messages, throughLine }) => messages.every(({ line }, index) => line <= throughLine &&
+  (index === 0 || line > messages[index - 1].line)), { message: "Subagent messages must follow their source order." })
+  .refine((transcript) => jsonBytes(transcript) <= MAX_SUBAGENT_TRANSCRIPT_BYTES, { message: "A subagent transcript exceeds 8 KiB." });
+
+const sessionSubagents = z.strictObject({
+  source: z.enum(["claude-code-sidecar", "codex-rollout"]),
+  truncated: z.boolean(),
+  transcripts: z.array(sessionSubagent).max(MAX_SESSION_SUBAGENTS),
+}).refine(({ transcripts }) => {
+  const ancestry = new Map<string, { depth: number; throughLine: number }>();
+  const calls = new Set<string>();
+  for (const { agentId, parentAgentId, throughLine, line, index } of transcripts) {
+    const parent = parentAgentId && ancestry.get(parentAgentId);
+    if (parentAgentId && (!parent || parent.depth >= MAX_SUBAGENT_DEPTH || line > parent.throughLine)) return false;
+    const call = `${parentAgentId ?? ""}:${line}:${index}`;
+    if (ancestry.has(agentId) || calls.has(call)) return false;
+    calls.add(call);
+    ancestry.set(agentId, { depth: parent ? parent.depth + 1 : 1, throughLine });
+  }
+  return true;
+}, { message: "Subagent transcripts must belong to distinct calls in their parent logs." });
 
 export const sessionCapture = z.strictObject({
   throughLine: z.int().positive(),
@@ -227,14 +408,18 @@ export const sessionCapture = z.strictObject({
     sandboxMode: setupValue.optional(),
     permissionMode: setupValue.optional(),
   }),
-}).refine(({ tools, files, throughLine }) => (
+  subagents: sessionSubagents.optional(),
+}).refine(({ tools, files, subagents, throughLine }) => (
   tools.every(({ line }) => line <= throughLine) &&
   files.every(({ line }) => line <= throughLine) &&
+  (!subagents || subagents.transcripts.every(({ line, parentAgentId }) => parentAgentId || line <= throughLine)) &&
   new Set(tools.map(({ line, index }) => `${line}:${index}`)).size === tools.length &&
   new Set(files.map(({ line, index, path }) => `${line}:${index}:${path}`)).size === files.length
 ), { message: "Session details must have unique locations covered by their source cursor." })
-  .refine((capture) => new TextEncoder().encode(JSON.stringify(capture)).byteLength <= MAX_SESSION_CAPTURE_BYTES, {
+  .refine(({ subagents, ...capture }) => jsonBytes(capture) <= MAX_SESSION_CAPTURE_BYTES, {
     message: "Session details exceed 512 KiB.",
+  }).refine(({ subagents }) => !subagents || jsonBytes(subagents) <= MAX_SESSION_SUBAGENT_BYTES, {
+    message: "Subagent conversations exceed 96 KiB.",
   });
 
 export type SessionCapture = z.infer<typeof sessionCapture>;
@@ -256,7 +441,7 @@ const activityDetail = z.strictObject({
   })),
   children: activityRows(activityLocation.extend({
     name: activityName.nullable(),
-    status: z.enum(["started", "running", "completed", "failed", "stopped", "unknown"]),
+    status: subagentStatus,
   })),
 });
 
@@ -345,8 +530,11 @@ export const sessionImportRequest = z.strictObject({
     ({ review, events }) => !review || review.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["review", "throughLine"], message: "Review must cover the last conversation message." },
   ).refine(
-    ({ capture, source, events }) => !capture || (
-      (source === "codex" || source === "claude-code") && capture.throughLine >= (events.at(-1)?.line ?? 0)
+    ({ activity, capture, source, events }) => !capture || (
+      (source === "codex" || source === "claude-code") && capture.throughLine >= (events.at(-1)?.line ?? 0) &&
+      (!capture.subagents || (capture.subagents.source === (source === "codex" ? "codex-rollout" : "claude-code-sidecar") &&
+        capture.subagents.transcripts.every(({ line, index, parentAgentId }) => parentAgentId ||
+          activity?.children.some((child) => child.line === line && child.index === index))))
     ),
     { path: ["capture"], message: "Session details must cover the conversation and come from a supported agent." },
   ),
@@ -374,6 +562,25 @@ const sessionSummaryResponse = z.strictObject({
 });
 
 export const sessionSummariesResponse = z.array(sessionSummaryResponse);
+export const weeklyDigestSessionsResponse = z.array(sessionSummaryResponse.extend({ recordedToolFailure: z.boolean() }));
+export type DigestSessionSummary = z.infer<typeof weeklyDigestSessionsResponse>[number];
+export const workspaceTrendsQuery = z.strictObject({ from: z.iso.date(), to: z.iso.date() })
+  .refine(({ from, to }) => readDay(from) && readDay(to) && from >= "0001-01-01" && from <= to &&
+    Date.parse(to) - Date.parse(from) < 180 * 86_400_000);
+export const workspaceTrendsSessions = z.array(sessionSummaryResponse.extend({
+  recordedToolFailure: z.boolean(),
+  reportedFrustration: z.boolean(),
+}));
+export type WorkspaceTrendsSession = z.infer<typeof workspaceTrendsSessions>[number];
+export const workspaceInsightSessionSummariesResponse = z.array(sessionSummaryResponse.extend({
+  member: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("active"), id: z.string().min(1) }),
+    z.strictObject({ kind: z.literal("former") }),
+    z.strictObject({ kind: z.literal("unknown") }),
+  ]),
+  reportedFrustration: z.boolean(),
+}));
+export type WorkspaceInsightSessionSummary = z.infer<typeof workspaceInsightSessionSummariesResponse>[number];
 export const sessionDetailResponse = sessionSummaryResponse.extend({
   sourceSessionId: z.uuid(),
   messages: z.array(conversationMessage).min(1).max(MAX_CODEX_IMPORT_EVENTS),
@@ -383,6 +590,8 @@ export const sessionDetailResponse = sessionSummaryResponse.extend({
 
 export const workspaceSessionDetailResponse = sessionDetailResponse.extend({ capture: sessionCapture.nullable() });
 export type WorkspaceSessionDetail = z.infer<typeof workspaceSessionDetailResponse>;
+export const cliSessionExport = sessionDetailResponse.extend({ capture: sessionCapture.nullish() });
+export type CliSessionExport = z.infer<typeof cliSessionExport>;
 
 export const sessionShareToken = z.string().regex(/^tdshare_[0-9a-f]{64}$/);
 
@@ -448,18 +657,45 @@ export const cliSessionPageResponse = z.strictObject({
 
 export const WORKSPACE_SESSION_PAGE_SIZE = 25;
 
+const sessionSearchRange = z.union([
+  z.number(),
+  z.string().max(32).regex(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number),
+]).pipe(z.number().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const sessionSearchCount = sessionSearchRange.pipe(z.int());
+
 export const workspaceSessionSearchQuery = z.strictObject({
   query: z.string().trim().max(200).refine((query) => !query.includes("\0"))
     .transform((query) => query || undefined).optional(),
+  sessionId: z.uuid().toLowerCase().optional(),
   source: sessionSource.optional(),
   repository: repository.shape.key.optional(),
   model: modelId.optional(),
+  member: z.string().regex(/^user_[A-Za-z0-9]+$/).max(96).optional(),
+  skill: activityName.optional(),
+  subagent: activityName.optional(),
+  failedTools: z.enum(["yes", "no"]).optional(),
+  frustration: z.literal("reported").optional(),
+  minCost: sessionSearchRange.optional(),
+  maxCost: sessionSearchRange.optional(),
+  minTokens: sessionSearchCount.optional(),
+  maxTokens: sessionSearchCount.optional(),
+  minDurationMinutes: sessionSearchRange.optional(),
+  maxDurationMinutes: sessionSearchRange.optional(),
+  minMessages: sessionSearchCount.optional(),
+  maxMessages: sessionSearchCount.optional(),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
   sort: z.enum(["newest", "oldest"]).optional(),
   page: z.union([z.int(), z.string().regex(/^[1-9][0-9]*$/).transform(Number)])
     .pipe(z.int().positive()).default(1),
-}).refine(validDateRange);
+}).refine(validDateRange).refine(({
+  minCost, maxCost, minTokens, maxTokens, minDurationMinutes, maxDurationMinutes, minMessages, maxMessages,
+}) => [
+  [minCost, maxCost],
+  [minTokens, maxTokens],
+  [minDurationMinutes, maxDurationMinutes],
+  [minMessages, maxMessages],
+].every(([min, max]) => min === undefined || max === undefined || min <= max));
 
 export const workspaceSessionSearchResponse = z.strictObject({
   sessions: sessionSummariesResponse.max(WORKSPACE_SESSION_PAGE_SIZE),
@@ -467,6 +703,11 @@ export const workspaceSessionSearchResponse = z.strictObject({
   page: z.int().positive(),
   repositories: z.array(repository),
   models: z.array(modelId),
+});
+
+export const workspaceSessionSearchWithFacets = workspaceSessionSearchResponse.extend({
+  skills: z.array(activityName),
+  subagents: z.array(activityName),
 });
 
 export const codexImportRequest = sessionImportRequest;
@@ -484,6 +725,9 @@ export type CliAccount = z.infer<typeof cliAccountResponse>;
 export type CliSessionListQuery = z.infer<typeof cliSessionListQuery>;
 export type WorkspaceSessionSearchQuery = z.infer<typeof workspaceSessionSearchQuery>;
 export type WorkspaceSessionSearchResponse = z.infer<typeof workspaceSessionSearchResponse>;
+export type WorkspaceSessionSearchWithFacets = z.infer<typeof workspaceSessionSearchWithFacets>;
+
+export { estimateSessionModelCost, priceSession, standardSessionRates } from "./session-pricing";
 
 export const workspaceActivityKind = z.enum(["skills", "mcp"]);
 export const workspaceActivityQuery = z.strictObject({
@@ -508,3 +752,126 @@ export const workspaceActivityResponse = z.strictObject({
 
 export type WorkspaceActivityQuery = z.infer<typeof workspaceActivityQuery>;
 export type WorkspaceActivityKind = z.infer<typeof workspaceActivityKind>;
+
+export const repositoryKey = repository.shape.key;
+export const repositoryEvidenceQuery = z.strictObject({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  source: sessionSource.optional(),
+  file: capturePath.optional(),
+  page: z.coerce.number().int().min(1).max(1_000).default(1),
+}).refine(validDateRange);
+
+const repositoryFileSession = z.strictObject({
+  id: z.uuid(),
+  title: z.string().min(1).max(100),
+  source: sessionSource,
+  startedAt: z.iso.datetime(),
+});
+const repositoryFileChange = z.enum(["added", "modified", "deleted", "renamed"]);
+
+export const repositoryFilesResponse = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("index"),
+    rows: z.array(z.strictObject({
+      path: capturePath,
+      change: repositoryFileChange,
+      changes: z.int().positive(),
+      session: repositoryFileSession,
+    })).max(40),
+    hasNext: z.boolean(),
+    partial: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("history"),
+    rows: z.array(z.strictObject({
+      line: activityLocation.shape.line,
+      index: activityLocation.shape.index,
+      change: repositoryFileChange,
+      previousPath: capturePath.nullable(),
+      diff: captureText.nullable(),
+      truncated: z.boolean(),
+      session: repositoryFileSession,
+    })).max(8),
+    hasNext: z.boolean(),
+    partial: z.boolean(),
+  }),
+]);
+
+export const MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES = 96 * 1024;
+export const MAX_REPOSITORY_INSTRUCTION_FILE_BYTES = 16 * 1024;
+export const MAX_REPOSITORY_INSTRUCTION_FILES = 24;
+export const MAX_REPOSITORY_CONTEXT_ENTRIES = 48;
+export const MAX_REPOSITORY_CONTEXT_METADATA_BYTES = 256 * 1024;
+export const repositorySkillRoots = [".agents/skills", ".claude/skills", ".codex/skills", ".cursor/skills", ".opencode/skills", ".opencode/skill"] as const;
+export const repositoryAgentRootExtensions = {
+  ".claude/agents": ".md", ".codex/agents": ".toml", ".cursor/agents": ".md", ".opencode/agents": ".md", ".opencode/agent": ".md",
+} as const;
+export const repositoryConfigPaths: readonly string[] = [
+  ".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", ".cursor/mcp.json",
+  ".vscode/mcp.json", "opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc",
+];
+
+export function repositoryContextKind(path: string): "skill" | "agent" | "config" | "resource" | undefined {
+  if (!capturePath.safeParse(path).success || /(?:^|\/)(?:node_modules|vendor|dist|build|coverage)(?:\/|$)/iu.test(path)) return;
+  if (repositoryConfigPaths.includes(path)) return "config";
+  for (const [root, extension] of Object.entries(repositoryAgentRootExtensions)) {
+    if (path.startsWith(`${root}/`) && path.endsWith(extension) && path.split("/").slice(2).every((part) => !part.startsWith("."))) return "agent";
+  }
+  const root = repositorySkillRoots.find((candidate) => path.startsWith(`${candidate}/`));
+  if (!root) return;
+  const parts = path.slice(root.length + 1).split("/");
+  if (parts.length < 2 || parts.some((part) => part.startsWith("."))) return;
+  return parts.at(-1) === "SKILL.md" ? "skill" : "resource";
+}
+
+export const repositoryInstructionPath = capturePath.refine((path) => (
+  /^(?:(?!\.)[^/]+\/)*(?:(?:\.claude|\.codex)\/)?(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?)\.md$/u.test(path) &&
+  !/(?:^|\/)(?:node_modules|vendor|dist|build|coverage)(?:\/|$)/iu.test(path)
+));
+const instructionDocument = z.strictObject({
+  path: repositoryInstructionPath,
+  content: captureText.max(MAX_REPOSITORY_INSTRUCTION_FILE_BYTES),
+});
+const repositoryRevision = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u).nullable();
+const contextEntryPath = (kind: NonNullable<ReturnType<typeof repositoryContextKind>>) => capturePath.refine((path) => repositoryContextKind(path) === kind);
+const contextFileMetadata = { bytes: z.int().nonnegative().max(MAX_REPOSITORY_CONTEXT_METADATA_BYTES),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/u) };
+const repositoryContextEntry = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("skill"), path: contextEntryPath("skill"), content: instructionDocument.shape.content }),
+  z.strictObject({ kind: z.literal("agent"), path: contextEntryPath("agent"), content: instructionDocument.shape.content }),
+  z.strictObject({ kind: z.literal("config"), path: contextEntryPath("config"), ...contextFileMetadata }),
+  z.strictObject({ kind: z.literal("resource"), path: contextEntryPath("resource"), definitionPath: contextEntryPath("skill"), ...contextFileMetadata }),
+]);
+const repositoryContextSnapshot = z.strictObject({ revision: repositoryRevision, partial: z.boolean(), entries: z.array(repositoryContextEntry).max(MAX_REPOSITORY_CONTEXT_ENTRIES) })
+  .refine(({ entries }) => {
+    const paths = new Set(entries.map(({ path }) => path));
+    return paths.size === entries.length && entries.every((item) => item.kind !== "resource" || (
+      paths.has(item.definitionPath) && item.path.startsWith(item.definitionPath.slice(0, -"SKILL.md".length))
+    ));
+  });
+export const repositoryInstructionSnapshot = z.strictObject({
+  revision: repositoryRevision,
+  documents: z.array(instructionDocument).max(MAX_REPOSITORY_INSTRUCTION_FILES),
+  partial: z.boolean(),
+  context: repositoryContextSnapshot.optional(),
+}).refine(({ documents }) => new Set(documents.map(({ path }) => path)).size === documents.length)
+  .refine((snapshot) => jsonBytes(snapshot) <= 2 * MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES);
+export const repositoryInstructionUpload = z.strictObject({
+  workspaceId: z.uuid(),
+  repository: repositoryKey,
+  snapshot: repositoryInstructionSnapshot,
+  contextOnly: z.literal(true).optional(),
+}).refine(({ snapshot: { context, ...instructions }, contextOnly }) => jsonBytes(instructions) <= MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES &&
+  (!context || jsonBytes(context) <= MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES) &&
+  (!contextOnly || (context !== undefined && instructions.documents.length === 0 && instructions.revision === null && !instructions.partial)));
+export const repositoryInstructionsResponse = z.strictObject({
+  observedAt: z.iso.datetime(),
+  snapshot: repositoryInstructionSnapshot,
+}).nullable();
+
+export type RepositoryEvidenceQuery = z.infer<typeof repositoryEvidenceQuery>;
+export type RepositoryInstructionUpload = z.infer<typeof repositoryInstructionUpload>;
+export type RepositoryInstructionSnapshot = z.infer<typeof repositoryInstructionSnapshot>;
+export type RepositoryContextEntry = z.infer<typeof repositoryContextEntry>;
+export type RepositoryFilesResponse = z.infer<typeof repositoryFilesResponse>;

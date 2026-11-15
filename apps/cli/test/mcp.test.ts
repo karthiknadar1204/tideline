@@ -41,6 +41,7 @@ test("MCP reads one workspace and saves a private report over stdio", {
   const written: unknown[] = [];
   const searches: URLSearchParams[] = [];
   let revoked = false;
+  const coverage = { collectors: 1, reportedAt: startedAt, partial: false, known: 2, ready: 1, pending: 0 };
   const api = createServer(async (request, response) => {
     if (revoked || request.headers.authorization !== `Bearer ${token}`) return void response.writeHead(401).end();
     const url = new URL(request.url ?? "", "http://local");
@@ -50,6 +51,7 @@ test("MCP reads one workspace and saves a private report over stdio", {
       return void response.end(JSON.stringify({ sessions: [summary], page: 2, total: 27, repositories: [], models: [] }));
     }
     if (url.pathname === `${workspacePath}/sessions/${session.id}`) return void response.end(JSON.stringify(session));
+    if (url.pathname === `${workspacePath}/sync-coverage`) return void response.end(JSON.stringify(coverage));
     if (url.pathname === `${workspacePath}/saved-reports` && request.method === "POST") {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -92,7 +94,7 @@ test("MCP reads one workspace and saves a private report over stdio", {
 
     await client.connect(connectTransport());
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(({ name }) => name).sort(), ["get_session", "save_report", "search_sessions"]);
+    assert.deepEqual(tools.map(({ name }) => name).sort(), ["get_session", "save_report", "search_sessions", "sync_coverage"]);
     assert.ok(tools.find(({ name }) => name === "search_sessions")?.inputSchema.properties?.query);
     assert.equal(tools.find(({ name }) => name === "save_report")?.annotations?.readOnlyHint, false);
     const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args }, { timeout: 5_000 });
@@ -105,6 +107,7 @@ test("MCP reads one workspace and saves a private report over stdio", {
     assert.deepEqual(search.structuredContent?.sessions, [summary]);
     assert.equal(search.structuredContent?.total, 27);
     assert.deepEqual(Object.fromEntries(searches[0]), { query: "slow & broken", source: "codex", page: "2" });
+    assert.deepEqual((await call("sync_coverage", {})).structuredContent, coverage);
 
     const first = await call("get_session", { sessionId: session.id, textOffset: 32_000 });
     assert.equal(first.isError, undefined);

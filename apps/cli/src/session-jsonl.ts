@@ -11,13 +11,30 @@ export type SessionCandidate = Pick<SessionProjection, "source" | "sourceSession
 export type LiveReadOptions = {
   live: true;
   captureDetails?: boolean;
+  transcriptPreview?: boolean;
+  captureSubagents?: boolean;
+  findCodexSubagent?: (id: string) => readonly string[];
   projectDirectory?: string;
   projectScope?: (directory: string | undefined) => Promise<string | undefined>;
   projectRoot?: (directory: string) => string | undefined;
   sessionAllowed?: (candidate: SessionCandidate) => boolean;
   since?: number;
 };
-export type LiveSession = { projectDirectory: string; session: SessionProjection; evidence?: SessionEvidence };
+export type LiveSession = {
+  projectDirectory: string;
+  session: SessionProjection;
+  evidence?: SessionEvidence;
+  sidecarRevision?: { read: () => Promise<string>; value: string };
+  rawSubagents?: RawSubagentStream[];
+};
+
+type RawSubagentFile = {
+  agentId: string;
+  path: string;
+  identity: { dev: number; ino: number };
+  anchor: { start: number; offset: number; digest: string };
+};
+export type RawSubagentStream = RawSubagentFile & ({ source: "claude-code" } | { source: "codex"; startedAt: number });
 
 export function sourceSessionUuid(source: SessionSource, nativeId: string) {
   const digest = createHash("sha256").update(source).update("\0").update(nativeId).digest("hex");
@@ -27,7 +44,7 @@ export function sourceSessionUuid(source: SessionSource, nativeId: string) {
 
 const chunkSize = 32 * 1024;
 
-export async function* readJsonl(path: string, live = false, captureDetails = false): AsyncGenerator<{ value: unknown; line: number }> {
+export async function* readJsonl(path: string, live = false, captureDetails = false, transcriptPreview = false): AsyncGenerator<{ value: unknown; line: number }> {
   const flags = constants.O_RDONLY | constants.O_NONBLOCK | (live ? constants.O_NOFOLLOW : 0);
   const file = await open(path, flags).catch(() => {
     throw new Error("Could not open the selected session JSONL file.");
@@ -37,7 +54,7 @@ export async function* readJsonl(path: string, live = false, captureDetails = fa
   let position = 0;
   let line = 0;
   let remainder = Buffer.alloc(0);
-  const limit = live && captureDetails ? 8 * 1024 * 1024 : MAX_CODEX_IMPORT_BYTES;
+  const limit = live && (captureDetails || transcriptPreview) ? 8 * 1024 * 1024 : MAX_CODEX_IMPORT_BYTES;
 
   function parse(bytes: Uint8Array) {
     line++;
@@ -84,7 +101,7 @@ export async function* readJsonl(path: string, live = false, captureDetails = fa
       remainder = data.subarray(start);
     }
 
-    if (initial.size > limit) {
+    if (initial.size > limit && !transcriptPreview) {
       throw new Error(`The selected file exceeds the ${limit / (1024 * 1024)} MiB import limit.`);
     }
     if (!live && remainder.length) {
@@ -93,7 +110,7 @@ export async function* readJsonl(path: string, live = false, captureDetails = fa
     }
 
     const current = await file.stat();
-    if (current.size !== initial.size || current.mtimeMs !== initial.mtimeMs || current.ctimeMs !== initial.ctimeMs) {
+    if (transcriptPreview ? current.size < initial.size : (current.size !== initial.size || current.mtimeMs !== initial.mtimeMs || current.ctimeMs !== initial.ctimeMs)) {
       throw new Error("The session file changed while Tideline read it.");
     }
   } finally {
@@ -120,4 +137,12 @@ export function createProjectScope(approvedDirectory?: string) {
     resolved.set(directory, allowed);
     return allowed;
   };
+}
+
+export function appendPreviewMessage(events: SessionProjection["events"], event: SessionProjection["events"][number], collectedBytes: number) {
+  const bounded = event.text.length > 32_000 ? { ...event, text: Array.from(event.text).slice(0, 15_000).join("") } : event;
+  const bytes = Buffer.byteLength(JSON.stringify(bounded));
+  if (collectedBytes + bytes > 448 * 1024) return null;
+  events.push(bounded);
+  return collectedBytes + bytes;
 }

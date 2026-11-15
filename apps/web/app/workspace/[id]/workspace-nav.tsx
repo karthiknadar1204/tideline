@@ -4,6 +4,7 @@ import type { WorkspaceAccess } from "@tideline/contracts";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
+import { normalizeWorkspacePath } from "../../../lib/workspace-path";
 import styles from "./workspace-shell.module.css";
 
 type RepositoryLink = { key: string; name: string };
@@ -15,7 +16,7 @@ export function WorkspaceNav({ workspace, workspaces, repositories, children }: 
   children: ReactNode;
 }) {
   const base = `/workspace/${workspace.id}`;
-  const pathname = usePathname();
+  const pathname = normalizeWorkspacePath(usePathname(), workspace.id);
   const currentRepo = useSearchParams().get("repository");
   const sessionsActive = pathname === base || pathname.startsWith(`${base}/sessions/`);
   const settingsActive = pathname.startsWith(`${base}/settings`) || pathname === `${base}/members`;

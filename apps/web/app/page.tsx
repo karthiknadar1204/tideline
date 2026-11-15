@@ -61,6 +61,7 @@ export default function Home() {
       <header className={`${styles.shell} ${styles.header}`}>
         <Link href="/" className={styles.brand}><span className={styles.brandMark} aria-hidden="true" />Tideline</Link>
         <nav aria-label="Main navigation" className={styles.nav}>
+          <Link href="/trends" className={styles.navLink}>Trends</Link>
           <Link href="/docs" className={styles.navLink}>Docs</Link>
           <Suspense>
             <Show when="signed-out"><Link className={styles.navButton} href="/sign-in">Sign in</Link></Show>

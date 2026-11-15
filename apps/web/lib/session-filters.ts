@@ -2,7 +2,12 @@ import { workspaceSessionSearchQuery } from "@tideline/contracts";
 import type { WorkspaceSessionSearchQuery } from "@tideline/contracts";
 
 type SearchParams = Record<string, string | string[] | undefined>;
-const fields = ["query", "source", "repository", "model", "from", "to", "sort", "page"] as const;
+const refinementFields = [
+  "sessionId", "source", "repository", "model", "member", "skill", "subagent", "failedTools", "frustration",
+  "minCost", "maxCost", "minTokens", "maxTokens", "minDurationMinutes", "maxDurationMinutes", "minMessages", "maxMessages",
+  "from", "to",
+] as const satisfies readonly (keyof WorkspaceSessionSearchQuery)[];
+const fields = ["query", ...refinementFields, "sort", "page"] as const;
 
 export function parseSessionFilters(input: SearchParams) {
   const present = Object.fromEntries(fields.flatMap((field) => {
@@ -35,6 +40,6 @@ export function sessionDetailHref(workspaceId: string, sessionId: string, filter
   return `/workspace/${workspaceId}/sessions/${sessionId}${query ? `?${query}` : ""}`;
 }
 
-export function sessionHasFilters({ query, source, repository, model, from, to }: WorkspaceSessionSearchQuery) {
-  return Boolean(query || source || repository || model || from || to);
+export function sessionHasFilters(filters: WorkspaceSessionSearchQuery) {
+  return Boolean(filters.query) || refinementFields.some((field) => filters[field] !== undefined);
 }

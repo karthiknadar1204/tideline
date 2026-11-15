@@ -8,7 +8,7 @@ export function SettingsHeader({ workspace }: { workspace: WorkspaceAccess }) {
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Settings</h1>
         <p className="text-sm text-[var(--workspace-muted)]">{workspace.name}</p>
       </header>
-      <SettingsNav workspaceId={workspace.id} team={workspace.kind === "team"} />
+      <SettingsNav workspaceId={workspace.id} team={workspace.kind === "team"} owner={workspace.role === "owner"} />
     </>
   );
 }

@@ -379,5 +379,9 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
     };
   }
 
-  return { response, event, skill, snapshot };
+  function subagentLinks() {
+    return [...children].flatMap(([agentId, child]) => z.uuid().safeParse(agentId).success ? [{ agentId, ...child }] : []);
+  }
+
+  return { response, event, skill, snapshot, subagentLinks };
 }

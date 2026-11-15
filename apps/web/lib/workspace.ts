@@ -4,9 +4,12 @@ import {
   sessionSummariesResponse,
   workspaceAccess,
   workspaceAccessList,
+  workspaceAddress,
   workspaceCliStatus,
+  workspaceInsightSessionSummariesResponse,
   workspaceResponse,
-  workspaceSessionSearchResponse,
+  workspaceSessionSearchWithFacets,
+  workspaceTeam,
   workspaceUsageTargets,
 } from "@tideline/contracts";
 import type { WorkspaceNameUpdate, WorkspaceSessionSearchQuery, WorkspaceUsageTargetUpdate } from "@tideline/contracts";
@@ -26,7 +29,7 @@ export function fetchTidelineApi(path: string, options: RequestInit = {}) {
     ...options,
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(5_000),
+    signal: options.signal ?? AbortSignal.timeout(5_000),
   }).catch(() => null);
 }
 
@@ -40,6 +43,7 @@ export async function fetchWorkspaceResource(path: string, { allowNotFound, ...o
   const response = await fetchTidelineApi(`/workspaces/${path}`, { ...options, headers });
 
   if (response?.status === 401) redirect("/sign-in");
+  if (response?.status === 410) redirect("/account/delete");
   if (response?.status === 404 && !allowNotFound) notFound();
   return response;
 }
@@ -59,6 +63,10 @@ export const readWorkspaceAccess = cache(async (workspaceId: string) => {
   return workspaceAccess.parse(await requestWorkspaceResource(encodeURIComponent(workspaceId)));
 });
 
+export const readWorkspaceAddress = cache(async (workspaceId: string) => {
+  return workspaceAddress.parse(await requestWorkspaceResource(`address/${encodeURIComponent(workspaceId)}`));
+});
+
 export const listAccessibleWorkspaces = cache(async () => {
   return workspaceAccessList.parse(await requestWorkspaceResource("list"));
 });
@@ -75,8 +83,18 @@ export const listWorkspaceSessions = cache(async (workspaceId: string) => {
   );
 });
 
+export const listWorkspaceInsightSessions = cache(async (workspaceId: string) => {
+  return workspaceInsightSessionSummariesResponse.parse(
+    await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/sessions?insights=1`),
+  );
+});
+
+export const readWorkspaceTeam = cache(async (workspaceId: string) => {
+  return workspaceTeam.parse(await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/team`));
+});
+
 const readSessionSearch = cache(async (workspaceId: string, params: string) => {
-  return workspaceSessionSearchResponse.parse(
+  return workspaceSessionSearchWithFacets.parse(
     await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/session-search${params ? `?${params}` : ""}`),
   );
 });

@@ -1,6 +1,6 @@
 import { lstat, opendir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { discoverClaudeSession, readClaudeSession } from "./claude-session";
 import { discoverCodexSession, readCodexSession } from "./codex-session";
 import { discoverCursorSessions, readCursorSessions } from "./cursor-session";
@@ -51,6 +51,34 @@ export function fileSources(roots: AgentRoots) {
     { source: "claude-code", root: roots.claudeRoot, depth: 1, read: readClaudeSession, discover: discoverClaudeSession },
     { source: "codex", root: roots.codexArchiveRoot, depth: 0, read: readCodexSession, discover: discoverCodexSession },
   ] as const;
+}
+
+const codexRolloutId = /^rollout-[^/]+-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.jsonl$/u;
+const codexIndexLimit = 50_000;
+
+export function createCodexSubagentIndex(roots: AgentRoots) {
+  let files = new Map<string, string[]>();
+  let refreshAt = 0;
+  return {
+    find: (id: string): readonly string[] => files.get(id) ?? [],
+    async refresh(signal: AbortSignal) {
+      if (Date.now() < refreshAt) return;
+      const next = new Map<string, string[]>();
+      for (const { source, root, depth } of fileSources(roots)) {
+        if (source !== "codex" || !root) continue;
+        for await (const path of sessionFiles(root, depth, () => {})) {
+          if (signal.aborted) return;
+          const id = codexRolloutId.exec(basename(path))?.[1];
+          if (!id) continue;
+          const matches = next.get(id);
+          if (matches && matches.length < 3) matches.push(path);
+          if (!matches && next.size < codexIndexLimit) next.set(id, [path]);
+        }
+      }
+      files = next;
+      refreshAt = Date.now() + 15_000;
+    },
+  };
 }
 
 export function databaseSources(roots: AgentRoots) {

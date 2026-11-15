@@ -1,12 +1,13 @@
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { MAX_CODEX_IMPORT_EVENTS, MAX_SESSION_CAPTURE_BYTES, modelTokens } from "@tideline/contracts";
 import type { ModelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createClaudeActivity } from "./claude-activity";
+import { readTranscriptSidecar } from "./transcript-sidecar";
+import { readClaudeSubagents } from "./claude-subagents";
+import { claudeConversationText } from "./claude-text";
 import { createSessionCapture, isSensitiveFile } from "./session-capture";
-import { createProjectScope, readJsonl } from "./session-jsonl";
+import { appendPreviewMessage, createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
 import { createModelUsage, readModelId } from "./session-usage";
@@ -56,12 +57,8 @@ const claudeTokens = z.object({
   }).nullish(),
 });
 const apiMessageId = z.string().min(1).max(200);
-const blockType = z.object({ type: z.string() });
-const textBlock = z.object({ type: z.literal("text"), text: z.string() });
 const sessionId = z.uuid();
 const timestamp = z.iso.datetime();
-const injectedText = /<(system-reminder|local-command-[a-z-]+|command-[a-z-]+|task-notification|teammate-message|user-prompt-submit-hook|system_warning|available-deferred-tools)(?:\s[^>]*)?>(?:[\s\S]*?<\/\1\s*>|[\s\S]*$)/giu;
-const interruption = /^\[Request (?:interrupted|aborted|cancell?ed) by user(?: for tool use)?\]$/iu;
 
 function isRootMessage(record: z.infer<typeof claudeMetadata>) {
   return (record.type === "user" || record.type === "assistant") && !record.isSidechain && !record.agentId;
@@ -120,32 +117,9 @@ async function readPersistedOutput(transcript: string, sessionId: string, refere
       isSensitiveFile(name)) return;
   const directory = join(dirname(transcript), sessionId, "tool-results");
   const path = join(directory, name);
-  if (path !== reference || await realpath(directory).catch(() => undefined) !== directory) return;
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(() => undefined);
-  if (!file) return;
-  try {
-    const initial = await file.stat();
-    if (!initial.isFile() || initial.nlink !== 1) return;
-    const size = Math.min(initial.size, MAX_SESSION_CAPTURE_BYTES);
-    const bytes = Buffer.alloc(size);
-    let offset = 0;
-    while (offset < size) {
-      const { bytesRead } = await file.read(bytes, offset, size - offset, offset);
-      if (!bytesRead) return;
-      offset += bytesRead;
-    }
-    const current = await lstat(path);
-    if (!current.isFile() || current.ino !== initial.ino || current.dev !== initial.dev ||
-        current.nlink !== 1 || current.size !== initial.size || current.mtimeMs !== initial.mtimeMs ||
-        current.ctimeMs !== initial.ctimeMs || await realpath(directory) !== directory || bytes.includes(0)) return;
-    const truncated = size < initial.size;
-    const output = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: truncated });
-    return { output, truncated };
-  } catch {
-    return;
-  } finally {
-    await file.close();
-  }
+  if (path !== reference) return;
+  const detail = await readTranscriptSidecar(directory, path, MAX_SESSION_CAPTURE_BYTES);
+  return detail && { output: detail.text, truncated: detail.truncated };
 }
 
 export function readClaudeSession(path: string): Promise<SessionProjection>;
@@ -153,6 +127,7 @@ export function readClaudeSession(path: string, options: LiveReadOptions): Promi
 export async function readClaudeSession(path: string, options?: LiveReadOptions): Promise<SessionProjection | LiveSession | undefined> {
   let session: Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> | undefined;
   const events: SessionProjection["events"] = [];
+  let previewBytes = 0;
   const projectScope = options?.projectScope ?? createProjectScope(options?.projectDirectory);
   const checkoutOf = options?.projectRoot;
   let projectDirectory: string | undefined;
@@ -164,7 +139,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null }>();
   let throughLine = 0;
 
-  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails)) {
+  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails, options?.transcriptPreview)) {
     const parsed = claudeRecord.safeParse(value);
     if (!parsed.success) throw new Error(`Invalid Claude Code record at line ${line}.`);
     const record = parsed.data;
@@ -248,22 +223,19 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       }
     }
 
-    const { content } = message.data;
-    if (record.type === "user" && Array.isArray(content) &&
-      content.some((block) => blockType.safeParse(block).data?.type === "tool_result")) continue;
-    const parts = typeof content === "string" ? [content] : content.flatMap((block) => {
-      const parsedBlock = textBlock.safeParse(block);
-      return parsedBlock.success ? [parsedBlock.data.text] : [];
-    });
-    const text = parts.map((part) => part.replace(injectedText, "").trim())
-      .filter((part) => part.length > 0 && !interruption.test(part))
-      .join("\n");
+    const text = claudeConversationText(message.data.role, message.data.content);
     if (!text) continue;
     safety?.scanCredential(text, line);
     if (events.length === MAX_CODEX_IMPORT_EVENTS) {
+      if (options?.transcriptPreview) break;
       throw new Error(`The session exceeds the ${MAX_CODEX_IMPORT_EVENTS}-message import limit.`);
     }
-    events.push({ role: message.data.role, text, line, timestamp: at.data });
+    const event = { role: message.data.role, text, line, timestamp: at.data };
+    if (options?.transcriptPreview) {
+      const total = appendPreviewMessage(events, event, previewBytes);
+      if (total === null) break;
+      previewBytes = total;
+    } else events.push(event);
     throughLine = line;
   }
 
@@ -275,9 +247,20 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity,
-          capture: capture?.snapshot(events.at(-1)?.line ?? 0) },
-        evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
+      const lastMessageLine = events.at(-1)?.line ?? 0;
+      const detail = capture?.snapshot(lastMessageLine);
+      const subagents = detail && options.captureSubagents ? await readClaudeSubagents({
+        path, sessionId: session.sourceSessionId, links: activity.subagentLinks(), checkout: checkout ?? options.projectDirectory ?? projectDirectory,
+        projectScope, projectRoot: options.projectRoot, includeRaw: options.transcriptPreview,
+      }) : undefined;
+      return {
+        projectDirectory,
+        session: { ...session, events, analytics, activity: sessionActivity,
+          capture: detail && (subagents ? { ...detail, subagents: subagents.section } : detail) },
+        evidence: safety.snapshot(lastMessageLine),
+        sidecarRevision: subagents?.sidecarRevision,
+        rawSubagents: subagents?.raw,
+      };
     }
     return;
   }

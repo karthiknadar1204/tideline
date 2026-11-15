@@ -134,8 +134,8 @@ export function createClaudeActivity(safety?: ReturnType<typeof createSessionSaf
         const call = match && calls.get(match[2]);
         if (!match || !localId.safeParse(match[1]).success || !call?.child || (call.agentId && call.agentId !== match[1])) return;
         const status = childStatus(match[3]);
+        if (status !== "unknown") call.agentId ??= match[1];
         if (status !== "unknown" && status !== "running" && call.child.status !== status) {
-          call.agentId = match[1];
           call.child.status = status;
           throughLine = line;
         }
@@ -213,5 +213,11 @@ export function createClaudeActivity(safety?: ReturnType<typeof createSessionSaf
     return { throughLine: Math.max(throughLine, lastMessageLine), truncated, tools, skills, children };
   }
 
-  return { observe, observeSlashCompanion, snapshot };
+  function subagentLinks() {
+    const recorded = new Set(children);
+    return [...calls.values()].flatMap(({ agentId, child }) => agentId && child && recorded.has(child)
+      ? [{ agentId, ...child }] : []);
+  }
+
+  return { observe, observeSlashCompanion, snapshot, subagentLinks };
 }

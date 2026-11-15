@@ -1,7 +1,9 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { MAX_SESSION_ACTIVITY_ITEMS, MAX_SESSION_CAPTURE_BYTES, MAX_SESSION_CAPTURE_FILES, MAX_SESSION_CAPTURE_TEXT } from "@tideline/contracts";
 import type { SessionCapture } from "@tideline/contracts";
-import { redactConversationText } from "./session-safety";
+import { privateRecordKey, redactCaptureText } from "@tideline/contracts/redaction";
+
+export { redactCaptureText };
 
 type ToolDetail = SessionCapture["tools"][number];
 type FileDetail = SessionCapture["files"][number];
@@ -11,18 +13,10 @@ type Location = Pick<ToolDetail, "line" | "index">;
 const omittedAttachment = "[Attachment omitted]";
 const binaryTypes = new Set(["audio", "document", "file", "image", "input_audio", "input_file", "input_image", "output_image"]);
 const textTypes = new Set(["input_text", "output_text", "text"]);
-const privateKeys = /^(?:auth|authorization|proxyauthorization|cookie|setcookie|(?:access|api|auth|bearer|refresh|session|id)?token|apikey|clientsecret|credential(?:s)?|(?:db|database)?password|privatekey|secret|env|environment)$/u;
 const privatePath = /(?:^|\/)(?:\.git|\.ssh|\.aws|\.gnupg|\.env(?:\.[^/]*)?|\.npmrc|\.pypirc|\.netrc|credentials?(?:\.[^/]*)?|auth\.json|id_(?:rsa|ed25519|ecdsa|dsa)|[^/]+\.(?:pem|key|p12|pfx))(?=\/|$)/iu;
 const validSetupValue = /^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,119}$/u;
 
-function redact(text: string) {
-  return redactConversationText(text)
-    .replace(/("(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|token|password|private[_-]?key)"\s*:\s*)"[^"\r\n]*"/giu, '$1"[REDACTED]"')
-    .replace(/((?:^|\n)[+\- ]*(?:export\s+)?(?:DATABASE_URL|DB_URL|NEON_DB_URL)\s*=)[^\r\n]+/giu, "$1[REDACTED]")
-    .replace(/(\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]+:)[^\s/@]+(?=@)/giu, "$1[REDACTED]")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/[\x00\uD800-\uDFFF]/gu, "\uFFFD");
-}
+const redact = redactCaptureText;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return;
@@ -78,7 +72,7 @@ function projectTool(value: unknown) {
         omitted = true;
         return [redact(key), omittedAttachment];
       }
-      return [redact(key), privateKeys.test(normalized) ? "[REDACTED]" : scrub(child, depth + 1)];
+      return [redact(key), privateRecordKey(key) ? "[REDACTED]" : scrub(child, depth + 1)];
     }));
   }
 

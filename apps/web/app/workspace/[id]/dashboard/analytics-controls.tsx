@@ -6,7 +6,7 @@ import { useState, useTransition } from "react";
 import type { FormEvent } from "react";
 import { reportPeriods } from "../../../../lib/reports";
 import { analyticsHref } from "../../../../lib/workspace-analytics";
-import type { AnalyticsFilters, AnalyticsMetric } from "../../../../lib/workspace-analytics";
+import type { AnalyticsFilters, AnalyticsMetric, RepositoryView } from "../../../../lib/workspace-analytics";
 import styles from "./analytics.module.css";
 
 export function AnalyticsControls({ path, filters, metric, today, view, showSource = true }: {
@@ -14,7 +14,7 @@ export function AnalyticsControls({ path, filters, metric, today, view, showSour
   filters: AnalyticsFilters;
   metric?: AnalyticsMetric;
   today: string;
-  view?: "sessions";
+  view?: RepositoryView;
   showSource?: boolean;
 }) {
   const router = useRouter();

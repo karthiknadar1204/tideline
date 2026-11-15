@@ -4,25 +4,33 @@ import { approvedWorkspaceDefault } from "./cli-account";
 import { readCodexSession } from "./codex-session";
 import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin } from "./login";
 
-type ImportOptions = {
+export type ImportOptions = {
   workspace?: string;
-  source: string;
+  source?: string;
   browser: boolean;
   sanitized?: boolean;
   dryRun?: boolean;
 };
 
-export async function importSession(file: string, options: ImportOptions) {
+export async function importSession(file: string, options: ImportOptions, {
+  expectedSessionId, beforeUpload,
+}: {
+  expectedSessionId?: string;
+  beforeUpload?: (session: { sourceSessionId: string; source: "codex" | "claude-code"; workspace: string }) => Promise<boolean>;
+} = {}) {
   const workspaceId = sessionImportRequest.shape.workspaceId.safeParse(options.workspace ?? await approvedWorkspaceDefault());
   if (!workspaceId.success) throw new Error("Pass --workspace with the destination workspace ID, or sign in with tideline login.");
 
   const apiOrigin = tidelineApiOrigin();
-  const { source } = options;
+  const source = options.source ?? "codex";
   if (source !== "codex" && source !== "claude-code") throw new Error("JSONL import supports codex and claude-code. Use sync to collect Cursor and OpenCode sessions.");
 
   const session = source === "claude-code"
     ? await readClaudeSession(file)
     : await readCodexSession(file);
+  if (expectedSessionId && session.sourceSessionId.toLowerCase() !== expectedSessionId) {
+    throw new Error("The selected local session changed while it was being read. Retry after checking its ID.");
+  }
   const payload = sessionImportRequest.safeParse({
     version: 1,
     workspaceId: workspaceId.data,
@@ -55,6 +63,7 @@ export async function importSession(file: string, options: ImportOptions) {
   if (!options.sanitized) {
     throw new Error("Review the conversation text and session metadata, then pass --sanitized to confirm it is safe to upload.");
   }
+  if (beforeUpload && !await beforeUpload({ sourceSessionId: session.sourceSessionId, source, workspace: workspaceId.data })) return;
 
   const accessToken = await approveInBrowser(options.browser);
   const response = await postToTideline({ apiOrigin, path: "/v1/cli/imports", accessToken, body });
@@ -67,4 +76,5 @@ export async function importSession(file: string, options: ImportOptions) {
 
   const status = receipt.data.alreadyReceived ? "Import already received" : "Import received";
   process.stdout.write(`${status}: ${receipt.data.id}. Open the workspace to see it after processing.\n`);
+  return receipt.data;
 }

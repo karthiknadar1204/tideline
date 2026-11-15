@@ -35,6 +35,7 @@ function CliGuide() {
         <p><Link href="/docs/get-started#prepare-cli">Install Tideline</Link>, then run <code>tideline</code> followed by a command. Add <code>--help</code> to see the command’s flags.</p>
         <CopyTerminalCommand command="tideline --help" label="Copy CLI help command" />
         <p>If your terminal cannot find <code>tideline</code>, run it as <code>~/.local/bin/tideline</code> or add <code>~/.local/bin</code> to your <code>PATH</code>.</p>
+        <p>Use <code>tideline --version</code> to see the installed version. Run <code>tideline update --check</code> to review the available release, or <code>tideline update</code> to install it after confirmation.</p>
       </section>
       <section aria-labelledby="account">
         <h2 id="account">Account and workspace</h2>
@@ -55,23 +56,37 @@ function CliGuide() {
           ["onboard", "Choose repositories, approve them, and get a dashboard link. Use the command from your workspace to follow setup progress in the browser."],
           ["sync setup", "Change which repositories upload. Clear the selection to pause uploads for all repositories after confirmation."],
           ["sync run", "Sync in the current terminal."],
-          ["sync start / sync stop", "Start or stop background sync. Run sync start again after a reboot."],
+          ["sync once", "Scan and upload approved sessions once, then exit."],
+          ["sync start / sync stop", "Start or stop background sync."],
+          ["sync autostart enable | status | disable", "Manage automatic startup on macOS or Linux with systemd. Use the installed CLI."],
           ["sync status", "Show selected repositories and upload status."],
           ["sync retry / upload --retry", "Retry queued or failed uploads from approved repositories."],
           ["sync revoke", "End the collector’s authorization. Run onboard again to connect it to a different workspace."],
         ]} />
         <p><code>connect</code>, <code>enable</code>, <code>disable</code>, and <code>upload</code> also open the repository picker. To select folders in a script, pass <code>--project /path/to/repository --conversations</code>. Add <code>--history</code> for older sessions or <code>--background</code> to start sync immediately.</p>
         <p>To include recorded files, setup, and tool details for Codex and Claude Code, run <code>tideline sync setup --session-details</code>. Add <code>--history</code> if you also want to collect these details from older sessions in the repositories you select.</p>
+        <p>With session details enabled, add <code>--subagent-transcripts</code> to collect bounded excerpts of linked Codex and Claude Code child conversations up to four levels deep. You can read them in the parent session’s <strong>Subagents</strong> tab.</p>
+        <p>Add <code>--hooks</code> to install Codex and Claude Code hooks that wake a running collector. Review them with <code>tideline hooks status</code>. If Codex prompts for trust, review the new Tideline commands in Codex’s <code>/hooks</code> menu. Run <code>tideline hooks remove</code> to remove them.</p>
+        <p>Add <code>--full-transcripts</code> to sync the redacted Codex and Claude Code JSONL logs and supported embedded images. Keep <code>--session-details</code> and <code>--subagent-transcripts</code> enabled to add separate streams for verified child agents. Open <strong>Transcript</strong> in the session to read them.</p>
+        <p>Add <code>--repository-instructions</code> to sync supported instruction files from the selected Git checkouts. Add <code>--repository-context</code> separately to sync redacted skill and agent definitions. Configurations and skill resources include only paths, file sizes, and collector fingerprints. Open a repository’s <strong>Context</strong> tab to view the snapshot.</p>
       </section>
       <section aria-labelledby="import-export">
         <h2 id="import-export">Import, export, and query</h2>
         <CommandTable rows={[
           ["import <file> --workspace <id> --dry-run", "Preview a single sanitized Codex JSONL file. Use --source claude-code for a Claude Code log. Review the file and use --sanitized to upload it."],
+          ["report link <report-id> <session-id>", "Cite a synced session in a report you authored in the same workspace. Use --source with a native agent session ID."],
+          ["import <session-id> --analysis <report-id> --sanitized", "Import and cite a local Codex or Claude Code session by its native ID. Review the session before passing --sanitized and approve the upload in your browser."],
           ["pull --repo my-repo --out ./tideline-export", "Save matching conversations as JSONL files with a local manifest."],
           ['count "test failed" --in ./tideline-export', "Count matching messages in a local export. Use --unit session to count conversations."],
           ['sql "SELECT source, count(*) FROM sessions GROUP BY source"', "Query synced records with read-only SQLite. Use --in for a local export or --out for a new CSV or JSONL file."],
         ]} />
         <p>Run <code>login</code> before querying the workspace. <code>pull</code>, <code>count</code>, and <code>sql</code> accept <code>--repo</code>, <code>--source</code>, <code>--from</code>, and <code>--to</code>. Dates are inclusive UTC days in <code>YYYY-MM-DD</code> format. SQL tables include <code>sessions</code>, <code>messages</code>, <code>models</code>, <code>activity</code>, <code>commits</code>, and <code>safety_findings</code>.</p>
+        <p>Add <code>--details</code> to <code>pull</code> or live <code>sql</code> to include captured tool text, diffs, and setup. Use <code>--pattern</code> to match a regular expression. Regex counts use the latest default pull when available. Pass <code>--live</code> to query the workspace or <code>--in</code> to select a local export.</p>
+        <p>Add <code>--transcripts</code> to <code>pull</code> to also save the archived JSONL and embedded images for matching sessions.</p>
+        <p>Count tool calls with <code>--unit call</code> and narrow the match with <code>--field tool-input</code> or <code>--field tool-output</code>. SQL tables for details include <code>calls</code>, <code>prompts</code>, <code>agent_runs</code>, <code>agent_messages</code>, <code>file_changes</code>, and <code>session_setup</code>.</p>
+        <p>Run <code>tideline github sync</code> from a GitHub checkout to import recent merged PRs and GitHub Actions runs. Sign in first with <code>gh auth login</code>. Open <strong>Reports → GitHub</strong> to see the imported activity.</p>
+        <p>To keep GitHub activity updated automatically, run <code>tideline sync setup --github-activity</code> and select your checkouts. GitHub credentials stay in your local <code>gh</code> installation. Run setup with <code>--no-github-activity</code> to turn it off.</p>
+        <p>Open <strong>Reports → Trends</strong> to compare completed UTC date ranges. Use the filters to compare an agent or repository, then open the sessions behind recorded failures or frustration.</p>
       </section>
       <section aria-labelledby="troubleshoot">
         <h2 id="troubleshoot">Troubleshoot sync</h2>
@@ -98,6 +113,7 @@ function Dashboard() {
         <p>A session is a coding conversation saved by an agent. Open <strong>Sessions</strong> to search its title or text. Filter by repository and agent, or expand <strong>More filters</strong> for model and UTC dates.</p>
         <p>Open a session to read the conversation and any recorded tool calls, skills, and child agent runs. A tool marked <strong>Returned</strong> produced a result. Its child agent can still be running. Tideline shows the last status recorded in the parent session.</p>
         <p>When session details are enabled, expand a tool in <strong>Timeline</strong> to read its recorded input and output. Open <strong>Files</strong> for diffs recorded by the agent, or <strong>Setup</strong> for available runtime settings.</p>
+        <p>Open <strong>Transcript</strong> to inspect redacted source records beyond the conversation view. You can download the JSONL or individual images from this view.</p>
         <p>When the collector can verify a commit reported in the session, the session shows its SHA and a link for GitHub or GitLab origins. Safety findings show the rule and log line for a possible credential or risky command. Review the finding in context.</p>
       </section>
       <section aria-labelledby="reports">
@@ -175,6 +191,8 @@ function DataAndPrivacy() {
         <p>Cursor sends conversation and repository data and available model names. OpenCode can also include reported token counts. Tideline currently shows cost and activity for supported Codex and Claude Code records.</p>
         <p>Session details are optional. When enabled for Codex or Claude Code, the CLI also sends tool input and output text, recorded repository diffs, and selected setup metadata. These details can include source code and command output. The CLI redacts common credential patterns. Shared session links include the conversation only.</p>
         <p>Each upload includes up to 1 MiB and 500 messages for the conversation and its standard metadata. Optional session details have a separate 512 KiB limit. The collector checks local files and databases about every two seconds while it runs. It queues uploads locally and retries after reconnecting.</p>
+        <p>With full transcripts enabled, Tideline also archives redacted JSONL for approved Codex and Claude Code sessions. It saves embedded PNG, JPEG, GIF, and WebP images up to 6 MiB each. Links stay as text. Unsupported attachments are marked, and collection stops if a source record exceeds the local reader limit or leaves the selected checkout. Run <code>tideline sync setup --no-full-transcripts</code> to stop sending this data.</p>
+        <p>Sync coverage uses an inventory of session IDs, agent names, and start times for approved repositories. The same report sends repository names and hashed IDs for the status shown in <strong>Settings → Uploads</strong>. The collector sends it at startup and every 30 minutes while running. Set <code>TIDELINE_SESSION_INVENTORY=0</code> in the collector environment to clear the previous report at its next connection and stop sending it.</p>
       </section>
       <section aria-labelledby="access">
         <h2 id="access">Who can read sessions</h2>

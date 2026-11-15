@@ -115,7 +115,7 @@
 .chip:focus-visible,
 .sessionRow:focus-visible,
 .readerLinks a:focus-visible,
-.timelineTabs button:focus-visible,
+.timelineTabs a:focus-visible,
 .eventSummary:focus-visible,
 .captureCode:focus-visible,
 .outlineList a:focus-visible {
@@ -162,6 +162,34 @@
 
 .filterDates {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.filterPopover {
+  display: flex;
+  width: min(27rem, 100%);
+  max-height: min(65dvh, 31rem);
+  flex-direction: column;
+}
+
+.filterPopover .filterFields {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.125rem 0.25rem 0.125rem 0.125rem;
+}
+
+.filterRange {
+  min-width: 0;
+  border: 1px solid var(--workspace-border);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.55rem 0.55rem;
+}
+
+.filterRange legend {
+  padding-inline: 0.2rem;
+  color: var(--workspace-muted);
+  font-size: 0.75rem;
+  font-weight: 550;
 }
 
 .label {
@@ -427,7 +455,7 @@
   border-bottom: 1px solid var(--workspace-border);
 }
 
-.timelineTabs button {
+.timelineTabs a {
   border-bottom: 2px solid transparent;
   padding: 0.55rem 0.15rem;
   color: var(--workspace-muted);
@@ -435,12 +463,12 @@
   font-weight: 600;
 }
 
-.timelineTabs button:hover,
-.timelineTabs button[aria-selected="true"] {
+.timelineTabs a:hover,
+.timelineTabs a[aria-selected="true"] {
   color: var(--workspace-accent);
 }
 
-.timelineTabs button[aria-selected="true"] {
+.timelineTabs a[aria-selected="true"] {
   border-bottom-color: var(--workspace-accent);
 }
 
@@ -830,4 +858,10 @@
   .eventChevron {
     transition: none;
   }
+}
+
+.subagentChildren {
+  margin-block-start: 0.5rem;
+  border-inline-start: 1px solid var(--workspace-border);
+  padding-inline-start: clamp(0.25rem, 2vw, 0.9rem);
 }
