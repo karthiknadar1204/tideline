@@ -17,6 +17,7 @@ import {
 } from "@tideline/contracts";
 import type { CliAccount, WorkspaceResponse, WorkspaceSessionSearchResponse } from "@tideline/contracts";
 import { createWorkspaceStore } from "@tideline/db";
+import { createCliSetupStore } from "@tideline/db/cli-setups";
 import { createSavedReportStore } from "@tideline/db/reports";
 import { createSessionShareStore } from "@tideline/db/shares";
 import { createSessionStore } from "@tideline/db/sessions";
@@ -24,10 +25,12 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createMiddleware } from "hono/factory";
+import { registerCliSetupRoutes } from "./cli-setup-routes";
 import { priceSession } from "./pricing";
 import { registerSavedReportRoutes } from "./saved-report-routes";
 import { registerSessionShareRoutes } from "./session-share-routes";
 import { registerTeamRoutes } from "./team-routes";
+import { registerWorkspaceActivityRoutes } from "./workspace-activity-routes";
 
 export type WorkspaceContext = { Variables: { userId: string; cliAccount: CliAccount } };
 const grantLifetimeMs = 30 * 24 * 60 * 60 * 1_000;
@@ -70,6 +73,7 @@ function getWorkspaceServices() {
       authorizedParties: [new URL(webOrigin).origin],
     },
     workspaces: createWorkspaceStore(databaseUrl),
+    setups: createCliSetupStore(databaseUrl),
     sessions: createSessionStore(databaseUrl),
     shares: createSessionShareStore(databaseUrl),
     savedReports: createSavedReportStore(databaseUrl),
@@ -120,6 +124,8 @@ export function createWorkspaceRoutes() {
     const workspace = await workspaces.ensurePersonal(context.get("userId"));
     return context.json(workspace satisfies WorkspaceResponse);
   });
+
+  registerWorkspaceActivityRoutes(routes, sessions);
 
   registerTeamRoutes(routes, workspaces, clerk);
   registerSessionShareRoutes(routes, shares);
@@ -256,6 +262,8 @@ export function createWorkspaceRoutes() {
     context.set("userId", auth.userId);
     await next();
   });
+
+  registerCliSetupRoutes(routes, services.setups, workspaces, requireClerkCli);
 
   routes.post("/cli/approve", requireClerkCli, async (context) => {
     const workspace = await workspaces.ensurePersonal(context.get("userId"));

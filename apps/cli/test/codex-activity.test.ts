@@ -108,16 +108,22 @@ test("Codex sync accepts durable child and tool records and ignores other thread
       item: { type: "CommandExecution", id: "user-shell-fixture", status: "completed", source: "user_shell" } }),
     event({ type: "item_completed", thread_id: fixture.id,
       item: { type: "SubAgentActivity", id: "child-completed", agent_thread_id: childId, kind: "completed" } }),
+    response({ type: "function_call", name: "check", namespace: "compiler", call_id: "call_mcp" }),
+    event({ type: "item_completed", thread_id: fixture.id,
+      item: { type: "McpToolCall", id: "call_mcp", server: "compiler", tool: "check", status: "completed", result: "PRIVATE-RESULT" } }),
+    response({ type: "function_call", name: "format", namespace: "compiler", call_id: "call_other" }),
   );
   const parsed = await fixture.read();
   assert.ok(parsed);
-  assert.deepEqual(parsed.session.activity?.tools.map(({ name, status }) => ({ name, status })), [
-    { name: "spawn_agent", status: "returned" },
-    { name: "exec_command", status: "failed" },
+  assert.deepEqual(parsed.session.activity?.tools.map(({ name, status, mcpServer }) => ({ name, status, mcpServer })), [
+    { name: "spawn_agent", status: "returned", mcpServer: undefined },
+    { name: "exec_command", status: "failed", mcpServer: undefined },
+    { name: "compiler:check", status: "returned", mcpServer: "compiler" },
+    { name: "compiler:format", status: "called", mcpServer: undefined },
   ]);
   assert.deepEqual(parsed.session.activity?.children, [{ line: 3, index: 0, name: "reviewer", status: "completed" }]);
   assert.doesNotMatch(JSON.stringify(parsed.session.activity), /PRIVATE-/u);
-  assert.equal(parsed.session.activity?.throughLine, 8);
+  assert.equal(parsed.session.activity?.throughLine, 11);
 });
 
 test("Codex collaboration lifecycle names a child before the spawn tool returns", async (context) => {

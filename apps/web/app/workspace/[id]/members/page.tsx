@@ -3,6 +3,7 @@ import { workspaceTeam } from "@tideline/contracts";
 import { notFound } from "next/navigation";
 import { teamPanel, workspaceRoleLabel } from "../../../../lib/team-ui";
 import { fetchWorkspaceResource, readWorkspaceAccess } from "../../../../lib/workspace";
+import { SettingsHeader } from "../settings/settings-header";
 import { InviteMemberForm, MemberForm, RevokeInviteForm } from "./member-forms";
 
 const expiration = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
@@ -20,7 +21,7 @@ export default async function MembersPage({ params }: PageProps<"/workspace/[id]
 
   return (
     <main className="space-y-6 pt-7 sm:pt-9">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Members</h1>
+      <SettingsHeader workspace={workspace} />
       {canInvite && (
         <section aria-labelledby="invite-member" className={teamPanel}>
           <div className="space-y-1">

@@ -85,6 +85,13 @@
       "when": 1794670198439,
       "tag": "0011_saved_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794731386848,
+      "tag": "0012_cli_setup_pairing",
+      "breakpoints": true
     }
   ]
 }

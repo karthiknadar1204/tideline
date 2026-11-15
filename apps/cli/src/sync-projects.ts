@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
-import { autocompleteMultiselect, confirm, intro, isCancel, log, spinner } from "@clack/prompts";
+import { autocompleteMultiselect, confirm, intro, isCancel, log, select, spinner } from "@clack/prompts";
 import { sessionSourceLabel } from "@tideline/contracts";
 import type { SessionSource } from "@tideline/contracts";
 import { readCheckout } from "./repository";
@@ -40,6 +40,10 @@ function sessionCounts(repository: Repository) {
     }
   }
   return grouped;
+}
+
+function totalDiscoveredSessions(sessions: Map<SessionSource, Set<string>>) {
+  return [...sessions.values()].reduce((total, ids) => total + ids.size, 0);
 }
 
 async function* discoverSessions(roots: AgentRoots, warn: (message: string) => void) {
@@ -107,7 +111,10 @@ export async function explicitProjects(paths: string[]): Promise<Checkout[]> {
 export async function chooseProjects(
   roots: AgentRoots,
   previous: ApprovedProject[],
-  options: { workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean },
+  options: {
+    workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean;
+    onDiscovered?: (repositoriesFound: number, localSessionsFound: number) => Promise<void>;
+  },
 ) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Run in an interactive terminal to choose repositories, or pass --project and --conversations.");
@@ -119,8 +126,10 @@ export async function chooseProjects(
   const warnings = new Set<string>();
   const repositories = await discoverRepositories(roots, (warning) => warnings.add(warning));
   const discoveredCount = repositories.length;
-  scanning.stop(`Found ${discoveredCount} ${discoveredCount === 1 ? "repository or folder" : "repositories and folders"}`);
+  const localSessionsFound = repositories.reduce((total, repository) => total + totalDiscoveredSessions(sessionCounts(repository)), 0);
+  scanning.stop(`Found ${discoveredCount} ${discoveredCount === 1 ? "repository or folder" : "repositories and folders"} · ${localSessionsFound} ${localSessionsFound === 1 ? "local session" : "local sessions"}`);
   for (const warning of warnings) log.warn(warning);
+  await options.onDiscovered?.(discoveredCount, localSessionsFound);
 
   const priorByPath = new Map(previous.map((checkout) => [checkout.directory, checkout]));
   for (const repository of [...repositories]) {
@@ -144,51 +153,92 @@ export async function chooseProjects(
     throw new Error("Tideline found no local sessions. Start a session with Codex, Claude Code, Cursor, or OpenCode, then try again. To choose a folder now, pass --project /path/to/repository --conversations.");
   }
 
-  const choices = await autocompleteMultiselect({
-    message: "Choose repositories to sync",
-    placeholder: "Search repositories",
-    options: repositories.map((repository, index) => {
-      const { name, checkouts } = repository;
-      const sessions = sessionCounts(repository);
-      const count = [...sessions.values()].reduce((total, ids) => total + ids.size, 0);
-      return {
-        value: index,
-        label: `${terminalText(name)} · ${count} ${count === 1 ? "session" : "sessions"} found`,
-        hint: terminalText([
-          ...[...sessions].map(([source, ids]) => `${ids.size} ${sessionSourceLabel[source]}`),
-          ...(checkouts.size > 1 ? [`${checkouts.size} checkouts`] : [[...checkouts.keys()][0]]),
-        ].join(" · ")),
-      };
-    }),
-    required: !options.allowEmpty,
-    initialValues: repositories.flatMap(({ checkouts }, index) => [...checkouts.values()].every((checkout) => {
-      const prior = priorByPath.get(checkout.directory);
-      return prior && sameCheckout(prior, checkout);
-    }) ? [index] : []),
-    maxItems: 8,
+  const wasActive = (checkout: Checkout) => {
+    const prior = priorByPath.get(checkout.directory);
+    return Boolean(prior && sameCheckout(prior, checkout));
+  };
+  const items = repositories.map((repository, index) => {
+    const { name, checkouts } = repository;
+    const sessions = sessionCounts(repository);
+    const count = totalDiscoveredSessions(sessions);
+    const active = [...checkouts.values()].every(wasActive);
+    return {
+      value: index,
+      label: `${terminalText(name)} · ${count} ${count === 1 ? "local session" : "local sessions"}${active ? " · Sync on" : ""}`,
+      hint: terminalText([
+        ...[...sessions].map(([source, ids]) => `${ids.size} ${sessionSourceLabel[source]}`),
+        ...(checkouts.size > 1 ? [`${checkouts.size} checkouts`] : [[...checkouts.keys()][0]]),
+      ].join(" · ")),
+      active,
+      count,
+    };
   });
-  if (isCancel(choices)) return;
-  const selected = choices.map((index) => repositories[index]);
-  const projects = [...new Map(selected.flatMap(({ checkouts }) => [...checkouts])).values()];
-  if (!projects.length) {
-    const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
-    if (isCancel(approve) || !approve) return;
-    return { projects, history: false, background: false };
+  let initialValues = items.filter(({ active }) => active).map(({ value }) => value);
+  let historyDefault = false;
+  let backgroundDefault = true;
+
+  for (;;) {
+    const choices = await autocompleteMultiselect({
+      message: "Choose repositories to sync",
+      placeholder: "Search repositories",
+      options: items,
+      required: !options.allowEmpty,
+      initialValues,
+      maxItems: 8,
+    });
+    if (isCancel(choices)) return;
+    const selected = choices.map((index) => repositories[index]);
+    const projects = [...new Map(selected.flatMap(({ checkouts }) => [...checkouts])).values()];
+    if (!projects.length) {
+      const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
+      if (isCancel(approve) || !approve) return;
+      return { projects, history: false, background: false };
+    }
+    if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
+      log.info("Projects already approved for older sessions keep that approval.");
+    } else if (options.onboarding && options.history === undefined) {
+      log.info("You can import existing sessions or start with new sessions only.");
+    }
+    const history: Awaited<ReturnType<typeof confirm>> = options.history ?? await confirm({ message: "Import older sessions from these repositories?", initialValue: historyDefault });
+    if (isCancel(history)) return;
+    const background: Awaited<ReturnType<typeof confirm>> = options.background ?? await confirm({ message: "Keep syncing when this terminal closes?", initialValue: backgroundDefault });
+    if (isCancel(background)) return;
+
+    if (options.onboarding) {
+      const checkoutLabel = projects.length === 1 ? "folder" : "folders";
+      const added = projects.filter((checkout) => !wasActive(checkout)).length;
+      const kept = projects.length - added;
+      const paused = previous.length - kept;
+      log.info(`Review ${projects.length} ${checkoutLabel} · ${added} new · ${kept} continuing · ${paused} paused`);
+      const selectedSessions = choices.reduce((total, index) => total + items[index].count, 0);
+      log.info(`${selectedSessions} ${selectedSessions === 1 ? "local session" : "local sessions"} found in your selection. ${history ? "Include older sessions." : "Start with new sessions in newly selected folders."}`);
+    }
+    log.info(projects.map(({ directory }) => terminalText(directory)).join("\n"));
+    const destination = options.onDiscovered ? "the workspace open in your browser"
+      : options.workspace ? `workspace ${options.workspace}` : "your private workspace";
+    log.info(`Tideline uploads conversation text and available metadata from these folders to ${destination}. Common credentials in messages are redacted.`);
+
+    if (!options.onboarding) {
+      const approved = await confirm({ message: "Approve this selection?", initialValue: false });
+      if (isCancel(approved) || !approved) return;
+      return { projects, history, background };
+    }
+
+    const action = await select({
+      message: "Review repository selection",
+      initialValue: "change",
+      options: [
+        { value: "confirm", label: "Confirm selection and continue" },
+        { value: "change", label: "Change selection" },
+        { value: "cancel", label: "Cancel setup" },
+      ],
+    });
+    if (isCancel(action) || action === "cancel") return;
+    if (action === "confirm") return { projects, history, background };
+    initialValues = choices;
+    historyDefault = history;
+    backgroundDefault = background;
   }
-  if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
-    log.info("Projects already approved for older sessions keep that approval.");
-  } else if (options.onboarding && options.history === undefined) {
-    log.info("You can import existing sessions or start with new sessions only.");
-  }
-  const history = options.history ?? await confirm({ message: "Import older sessions from these repositories?", initialValue: false });
-  if (isCancel(history)) return;
-  const background = options.background ?? await confirm({ message: "Keep syncing when this terminal closes?", initialValue: true });
-  if (isCancel(background)) return;
-  log.info(projects.map(({ directory }) => terminalText(directory)).join("\n"));
-  log.info(`Tideline uploads conversation text and available metadata to ${options.workspace ? `workspace ${options.workspace}` : "your private workspace"}. Common credentials in messages are redacted.`);
-  const approvedSelection = await confirm({ message: "Approve this selection?", initialValue: false });
-  if (isCancel(approvedSelection) || !approvedSelection) return;
-  return { projects, history, background };
 }
 
 export function createApprovedScope(projects: ApprovedProject[]) {

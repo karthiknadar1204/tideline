@@ -66,6 +66,7 @@ function setupOptions(command: Command) {
 setupOptions(sync.command("setup").description("Choose repositories, import history, and configure sync")).action(runSetup);
 setupOptions(program.command("connect").description("Connect local repositories to a workspace")).action(runSetup);
 setupOptions(program.command("onboard").description("Connect your first repositories to the dashboard"))
+  .option("--code <code>", "Connect to a setup page in your browser")
   .action((options) => runSetup({ ...options, onboarding: true }));
 
 async function retry() {

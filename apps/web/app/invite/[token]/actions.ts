@@ -21,5 +21,5 @@ export async function acceptInvite(token: string): Promise<TeamActionState> {
   if (!response?.ok) return { kind: "error", message: "Could not join the workspace. Try again." };
 
   const workspace = workspaceAccess.parse(await response.json());
-  redirect(`/workspace/${workspace.id}`);
+  redirect(`/workspace/${workspace.id}/dashboard`);
 }

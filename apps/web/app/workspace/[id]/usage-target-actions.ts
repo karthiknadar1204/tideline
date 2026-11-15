@@ -27,7 +27,7 @@ async function saveTarget(id: string, update: WorkspaceUsageTargetUpdate): Promi
   if (!await updateWorkspaceUsageTarget(id, update)) {
     return { kind: "error", message: "Could not save this setting. Try again." };
   }
-  revalidatePath(`/workspace/${id}/settings`);
+  revalidatePath(`/workspace/${id}/settings/usage`);
   return { kind: "saved" };
 }
 

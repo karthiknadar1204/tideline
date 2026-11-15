@@ -5,6 +5,7 @@ import { formatCount, summarizeWorkspace } from "../../../../lib/usage";
 import { listWorkspaceSessions } from "../../../../lib/workspace";
 import { WorkspaceActivity } from "../activity-summary";
 import { UsageBreakdown, UsageCards } from "../usage-summary";
+import { ReportNavigation } from "./report-navigation";
 
 const dayLabel = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
 const monthLabel = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" });
@@ -85,10 +86,10 @@ export default async function ReportsPage({ params, searchParams }: PageProps<"/
           <p className="mt-2 text-sm text-[var(--workspace-muted)]">{interval} · UTC</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link className={action} href={`${base}/saved`}>Saved reports</Link>
           <a className={action} href={`${base}/export?${reportFilterParams(filters)}`}>Download CSV</a>
         </div>
       </header>
+      <ReportNavigation workspaceId={id} active="usage" />
       <form
         action={base}
         method="get"

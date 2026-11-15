@@ -2,7 +2,7 @@ import { workspaceSessionSearchQuery } from "@tideline/contracts";
 import type { WorkspaceSessionSearchQuery } from "@tideline/contracts";
 
 type SearchParams = Record<string, string | string[] | undefined>;
-const fields = ["query", "source", "repository", "model", "from", "to", "page"] as const;
+const fields = ["query", "source", "repository", "model", "from", "to", "sort", "page"] as const;
 
 export function parseSessionFilters(input: SearchParams) {
   const present = Object.fromEntries(fields.flatMap((field) => {
@@ -28,6 +28,11 @@ export function sessionFilterParams(filters: WorkspaceSessionSearchQuery) {
 export function sessionListHref(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
   const query = sessionFilterParams(filters).toString();
   return `/workspace/${workspaceId}${query ? `?${query}` : ""}`;
+}
+
+export function sessionDetailHref(workspaceId: string, sessionId: string, filters: WorkspaceSessionSearchQuery) {
+  const query = sessionFilterParams(filters).toString();
+  return `/workspace/${workspaceId}/sessions/${sessionId}${query ? `?${query}` : ""}`;
 }
 
 export function sessionHasFilters({ query, source, repository, model, from, to }: WorkspaceSessionSearchQuery) {

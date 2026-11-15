@@ -1,12 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
-import type { CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary, WorkspaceSessionSearchQuery } from "@tideline/contracts";
+import type {
+  CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary,
+  WorkspaceActivityKind, WorkspaceActivityQuery, WorkspaceSessionSearchQuery,
+} from "@tideline/contracts";
 import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { alias } from "drizzle-orm/pg-core";
 import { agentSessions, syncGrants, workspaces } from "./schema";
+import { readWorkspaceActivity } from "./workspace-activity";
 import { workspaceAccessibleTo } from "./workspaces";
 
 type Transaction = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
@@ -23,6 +27,19 @@ function countActivity(activity: SessionActivity | null): SessionSummary["activi
     skills: activity.skills.length,
     children: activity.children.length,
     truncated: activity.truncated,
+  };
+}
+
+function withKnownMcpServers(activity: SessionActivity, known: SessionActivity): SessionActivity {
+  const key = ({ line, index, name }: SessionActivity["tools"][number]) => `${line}:${index}:${name}`;
+  const servers = new Map(known.tools.filter(({ mcpServer }) => mcpServer).map((tool) => [key(tool), tool.mcpServer]));
+  if (!servers.size) return activity;
+  return {
+    ...activity,
+    tools: activity.tools.map((tool) => {
+      const mcpServer = servers.get(key(tool));
+      return mcpServer && !tool.mcpServer ? { ...tool, mcpServer } : tool;
+    }),
   };
 }
 
@@ -107,8 +124,13 @@ async function receiveSession(
     if (nextLine < previousLine || (!repositoryEnrichment && !correctsLegacyCoverage)) analyticsUpdate = undefined;
   }
   const previousActivityLine = existing.activity?.throughLine ?? 0;
-  if (activity?.throughLine === previousActivityLine && !isDeepStrictEqual(existing.activity, activity)) return null;
-  const activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
+  let activityUpdate = activity && activity.throughLine > previousActivityLine ? activity : undefined;
+  if (activity && existing.activity && activity.throughLine >= previousActivityLine) {
+    const received = withKnownMcpServers(activity, existing.activity);
+    if (activity.throughLine === previousActivityLine &&
+        !isDeepStrictEqual(withKnownMcpServers(existing.activity, activity), received)) return null;
+    if (!isDeepStrictEqual(existing.activity, received)) activityUpdate = received;
+  }
   const previousReviewLine = existing.review?.throughLine ?? 0;
   let reviewUpdate = review && review.throughLine > previousReviewLine ? review : undefined;
   if (review && existing.review && review.throughLine === previousReviewLine) {
@@ -229,6 +251,10 @@ export function createSessionStore(databaseUrl: string) {
       });
     },
 
+    activity(access: { workspaceId: string; userId: string }, kind: WorkspaceActivityKind, filters: WorkspaceActivityQuery) {
+      return readWorkspaceActivity(db, access, kind, filters);
+    },
+
     async listReady(workspaceId: string) {
       return db.select({ ...summaryFields, activityCounts }).from(agentSessions)
         .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0)))
@@ -274,8 +300,11 @@ export function createSessionStore(databaseUrl: string) {
         ]);
         const total = totals.total;
         const page = Math.min(filters.page, Math.max(1, Math.ceil(total / WORKSPACE_SESSION_PAGE_SIZE)));
+        const order = filters.sort === "oldest" ? [asc(agentSessions.startedAt), asc(agentSessions.id)]
+          : filters.sort === "newest" ? [desc(agentSessions.startedAt), desc(agentSessions.id)]
+          : [desc(agentSessions.receivedAt), desc(agentSessions.id)];
         const sessions = total ? await transaction.select({ ...summaryFields, activityCounts }).from(agentSessions).where(matches)
-          .orderBy(desc(agentSessions.receivedAt), desc(agentSessions.id))
+          .orderBy(...order)
           .limit(WORKSPACE_SESSION_PAGE_SIZE).offset((page - 1) * WORKSPACE_SESSION_PAGE_SIZE) : [];
         return { sessions, total, page, repositories, models: modelRows.map(({ model }) => model) };
       }, { isolationLevel: "repeatable read", accessMode: "read only" });
@@ -342,8 +371,7 @@ export function createSessionStore(databaseUrl: string) {
               is distinct from (${agentSessions.readyAnalytics} ->> 'throughLine')
             or (${agentSessions.pendingAnalytics} -> 'repository' ->> 'key')
               is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')
-            or (${agentSessions.pendingActivity} ->> 'throughLine')
-              is distinct from (${agentSessions.readyActivity} ->> 'throughLine')
+            or ${agentSessions.pendingActivity} is distinct from ${agentSessions.readyActivity}
             or ${agentSessions.pendingReview} is distinct from ${agentSessions.readyReview}`)
           .orderBy(asc(agentSessions.receivedAt), asc(agentSessions.id))
           .limit(1)

@@ -7,6 +7,7 @@
     "./migrate": "./src/migrate.ts",
     "./reports": "./src/reports.ts",
     "./sessions": "./src/sessions.ts",
+    "./cli-setups": "./src/cli-setups.ts",
     "./shares": "./src/shares.ts"
   },
   "scripts": {

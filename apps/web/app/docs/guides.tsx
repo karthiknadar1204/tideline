@@ -10,14 +10,14 @@ function GetStarted() {
         <h2 id="prepare-cli">Install the CLI</h2>
         <p>Use macOS or Linux with Node.js 22.13 or later within Node 22, or Node 24. Run this command in your terminal to install Tideline and open the repository picker.</p>
         <CopyTerminalCommand command={cliInstallCommand()} label="Copy install command" />
-        <p>To connect to a specific workspace, copy its setup command from <strong>Sessions</strong> or <strong>Settings</strong> → <strong>Sync from your computer</strong>.</p>
+        <p>To connect to a specific workspace, open its <strong>Dashboard</strong> or <strong>Settings</strong> → <strong>Uploads</strong> and select <strong>Get setup command</strong>. The command links your terminal to that browser page, where you can follow discovery, approval, and the start of sync.</p>
       </section>
       <section aria-labelledby="first-session">
         <h2 id="first-session">Sync your first session</h2>
         <ol>
           <li>Type to filter the repository picker. Use the arrow keys to move, <kbd>Tab</kbd> to select, and <kbd>Enter</kbd> to continue.</li>
           <li>Choose whether to import older conversations and keep sync running after you close the terminal. Older sessions are off by default. Review the repositories and confirm.</li>
-          <li>Approve the connection in the browser with the account you use for that workspace. Open the dashboard link printed by the CLI.</li>
+          <li>Approve the connection in the browser with the account that opened workspace setup. The setup page switches to your dashboard once the first session is ready.</li>
           <li>If you skipped older sessions, start a new agent session in a selected repository. The dashboard lists the session after processing.</li>
         </ol>
         <p>If you skipped background sync, run <code>tideline sync run</code> to keep syncing in your current terminal.</p>
@@ -52,7 +52,7 @@ function CliGuide() {
       <section aria-labelledby="sync">
         <h2 id="sync">Control sync</h2>
         <CommandTable rows={[
-          ["onboard", "Choose repositories, approve them, and get a dashboard link. Use --workspace to choose the destination of a new collector."],
+          ["onboard", "Choose repositories, approve them, and get a dashboard link. Use the command from your workspace to follow setup progress in the browser."],
           ["sync setup", "Change which repositories upload. Clear the selection to pause uploads for all repositories after confirmation."],
           ["sync run", "Sync in the current terminal."],
           ["sync start / sync stop", "Start or stop background sync. Run sync start again after a reboot."],
@@ -88,6 +88,10 @@ function CliGuide() {
 function Dashboard() {
   return (
     <>
+      <section aria-labelledby="workspace-activity">
+        <h2 id="workspace-activity">Explore workspace activity</h2>
+        <p>In <strong>Dashboard</strong>, choose a metric, date range, or agent. Select a chart bar to open its sessions. Use <strong>Repositories</strong> to see one repository at a time, and <strong>Skills</strong> or <strong>MCP</strong> to see recorded usage and jump to the latest matching session.</p>
+      </section>
       <section aria-labelledby="sessions">
         <h2 id="sessions">Find and read sessions</h2>
         <p>A session is a coding conversation saved by an agent. Open <strong>Sessions</strong> to search its title or text. Filter by repository and agent, or expand <strong>More filters</strong> for model and UTC dates.</p>
@@ -101,7 +105,7 @@ function Dashboard() {
       </section>
       <section aria-labelledby="budgets">
         <h2 id="budgets">Set a budget or goal</h2>
-        <p>Workspace admins and owners can use <strong>Settings</strong> to set a monthly estimated spend budget, plus a weekly or monthly goal for tokens or estimated spend. Goals can cover all agents or one agent.</p>
+        <p>Workspace admins and owners can open <strong>Settings</strong> → <strong>Usage limits</strong> to set a monthly estimated spend budget, plus a weekly or monthly goal for tokens or estimated spend. Goals can cover all agents or one agent.</p>
         <p>Periods use UTC and weeks start on Monday. Tideline puts each session in the period in which it started. Budgets and goals display progress in the dashboard.</p>
       </section>
       <section aria-labelledby="teams">
@@ -124,7 +128,7 @@ function McpGuide() {
         <h2 id="connect">Connect Codex</h2>
         <ol>
           <li><Link href="/docs/get-started#prepare-cli">Install the CLI</Link>. Run the login command and approve it in your browser.</li>
-          <li>Open <strong>Settings</strong> in the workspace your agent should use. Select <strong>Copy Codex setup</strong> under <strong>Connect an agent with MCP</strong>.</li>
+          <li>Open <strong>Settings</strong> → <strong>Integrations</strong> in the workspace your agent should use. Select <strong>Copy Codex setup</strong>.</li>
           <li>Run the copied command in your terminal, then start a new Codex session.</li>
         </ol>
         <CopyTerminalCommand command="tideline login" label="Copy sign-in command" />

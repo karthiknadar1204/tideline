@@ -43,7 +43,7 @@ export function SessionShare({ workspaceId, sessionId, displayed, status }: {
   const token = status?.token;
 
   return (
-    <details className="mt-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-4 py-2.5 sm:px-5">
+    <details className="rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-4 py-2.5 sm:px-5">
       <summary className={`w-fit cursor-pointer rounded text-sm font-medium text-[var(--workspace-accent)] ${focusStyle}`}>
         Share session
       </summary>

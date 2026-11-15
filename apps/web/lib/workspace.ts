@@ -3,6 +3,7 @@ import {
   sessionDetailResponse,
   sessionSummariesResponse,
   workspaceAccess,
+  workspaceAccessList,
   workspaceCliStatus,
   workspaceResponse,
   workspaceSessionSearchResponse,
@@ -58,23 +59,30 @@ export const readWorkspaceAccess = cache(async (workspaceId: string) => {
   return workspaceAccess.parse(await requestWorkspaceResource(encodeURIComponent(workspaceId)));
 });
 
+export const listAccessibleWorkspaces = cache(async () => {
+  return workspaceAccessList.parse(await requestWorkspaceResource("list"));
+});
+
 export async function hasWorkspaceCliApproval(workspaceId: string) {
   const response = await fetchWorkspaceResource(`${encodeURIComponent(workspaceId)}/cli-status`, { allowNotFound: true });
   const status = workspaceCliStatus.safeParse(response?.ok ? await response.json().catch(() => undefined) : undefined);
   return status.success && status.data.approved;
 }
 
-export async function listWorkspaceSessions(workspaceId: string) {
+export const listWorkspaceSessions = cache(async (workspaceId: string) => {
   return sessionSummariesResponse.parse(
     await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/sessions`),
   );
-}
+});
 
-export async function searchWorkspaceSessions(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
-  const params = sessionFilterParams(filters).toString();
+const readSessionSearch = cache(async (workspaceId: string, params: string) => {
   return workspaceSessionSearchResponse.parse(
     await requestWorkspaceResource(`${encodeURIComponent(workspaceId)}/session-search${params ? `?${params}` : ""}`),
   );
+});
+
+export function searchWorkspaceSessions(workspaceId: string, filters: WorkspaceSessionSearchQuery) {
+  return readSessionSearch(workspaceId, sessionFilterParams(filters).toString());
 }
 
 export async function readWorkspaceUsageTargets(workspaceId: string) {

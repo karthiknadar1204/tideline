@@ -13,6 +13,37 @@ export const cliInstallConfig = z.strictObject({
 
 export const workspaceCliStatus = z.strictObject({ approved: z.boolean() });
 
+export const cliSetupCode = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
+export const cliSetupWriter = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const repositoryCount = z.int().min(0).max(1_000_000);
+const selectedCheckoutCount = z.int().min(1).max(1_000_000);
+export const cliSetupTerminalProgress = z.discriminatedUnion("phase", [
+  z.strictObject({ phase: z.literal("choosing"), repositoriesFound: repositoryCount, localSessionsFound: z.int().nonnegative() }),
+  z.strictObject({ phase: z.literal("approving"), checkoutsSelected: selectedCheckoutCount, history: z.boolean() }),
+  z.strictObject({ phase: z.literal("ready"), checkoutsSelected: selectedCheckoutCount, background: z.boolean() }),
+  z.strictObject({ phase: z.literal("cancelled") }),
+  z.strictObject({ phase: z.literal("failed") }),
+]);
+export const cliSetupProgress = z.union([
+  cliSetupTerminalProgress,
+  z.strictObject({ phase: z.literal("waiting") }),
+  z.strictObject({ phase: z.literal("scanning") }),
+  z.strictObject({ phase: z.literal("starting"), checkoutsSelected: selectedCheckoutCount, history: z.boolean() }),
+]);
+export const cliSetupSnapshot = z.strictObject({
+  id: z.uuid(),
+  expiresAt: z.iso.datetime(),
+  progress: cliSetupProgress,
+});
+export const cliSetupCreated = z.strictObject({ ...cliSetupSnapshot.shape, code: cliSetupCode });
+export const cliSetupBrowserConnection = cliSetupSnapshot.extend({ command: z.string().min(1).max(600).optional() });
+export const cliSetupClaim = z.strictObject({ code: cliSetupCode, writer: cliSetupWriter });
+export const cliSetupClaimed = z.strictObject({ id: z.uuid(), workspaceId: z.uuid() });
+export const cliSetupAuthorization = cliSetupClaimed.extend({ userId: z.string().min(1) });
+export type CliSetupProgress = z.infer<typeof cliSetupProgress>;
+export type CliSetupTerminalProgress = z.infer<typeof cliSetupTerminalProgress>;
+export type CliSetupBrowserConnection = z.infer<typeof cliSetupBrowserConnection>;
+
 export const workspaceResponse = z.object({
   id: z.uuid(),
   name: z.string().min(1),
@@ -166,6 +197,7 @@ const activityDetail = z.strictObject({
   truncated: z.boolean(),
   tools: activityRows(activityLocation.extend({
     name: activityName,
+    mcpServer: activityName.optional(),
     status: z.enum(["called", "returned", "failed"]),
   })),
   skills: activityRows(activityLocation.extend({
@@ -365,6 +397,7 @@ export const workspaceSessionSearchQuery = z.strictObject({
   model: modelId.optional(),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
+  sort: z.enum(["newest", "oldest"]).optional(),
   page: z.union([z.int(), z.string().regex(/^[1-9][0-9]*$/).transform(Number)])
     .pipe(z.int().positive()).default(1),
 }).refine(validDateRange);
@@ -392,3 +425,27 @@ export type CliAccount = z.infer<typeof cliAccountResponse>;
 export type CliSessionListQuery = z.infer<typeof cliSessionListQuery>;
 export type WorkspaceSessionSearchQuery = z.infer<typeof workspaceSessionSearchQuery>;
 export type WorkspaceSessionSearchResponse = z.infer<typeof workspaceSessionSearchResponse>;
+
+export const workspaceActivityKind = z.enum(["skills", "mcp"]);
+export const workspaceActivityQuery = z.strictObject({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  source: sessionSource.optional(),
+  repository: repository.shape.key.optional(),
+}).refine(validDateRange);
+export const workspaceActivityResponse = z.strictObject({
+  sessionCount: z.int().nonnegative(),
+  coveredSessions: z.int().nonnegative(),
+  truncatedSessions: z.int().nonnegative(),
+  limited: z.boolean(),
+  rows: z.array(z.strictObject({
+    name: activityName,
+    calls: z.int().positive(),
+    sessions: z.int().positive(),
+    failed: z.int().nonnegative(),
+    latest: z.strictObject({ id: z.uuid(), at: z.iso.datetime() }),
+  })).max(100),
+});
+
+export type WorkspaceActivityQuery = z.infer<typeof workspaceActivityQuery>;
+export type WorkspaceActivityKind = z.infer<typeof workspaceActivityKind>;

@@ -2,16 +2,20 @@ import { sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contr
 import type { WorkspaceSessionSearchQuery, WorkspaceSessionSearchResponse } from "@tideline/contracts";
 import Form from "next/form";
 import Link from "next/link";
-import { parseSessionFilters, sessionFilterParams, sessionHasFilters, sessionListHref } from "../../../lib/session-filters";
-import { formatCount } from "../../../lib/usage";
+import { parseSessionFilters, sessionDetailHref, sessionFilterParams, sessionHasFilters, sessionListHref } from "../../../lib/session-filters";
+import { formatCost, formatCount, summarizeSession } from "../../../lib/usage";
 import { hasWorkspaceCliApproval, readWorkspaceAccess, searchWorkspaceSessions } from "../../../lib/workspace";
 import { FirstSessionSetup } from "./first-session-setup";
-import { RefreshSessions } from "./refresh-sessions";
+import { SessionMenu } from "./sessions/session-menu";
+import { SessionRefresh } from "./sessions/session-refresh";
+import styles from "./sessions/sessions.module.css";
 
-const sessionDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
-const field = "min-h-10 w-full min-w-0 rounded-lg border border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-3 text-sm outline-offset-2 focus-visible:outline-2 focus-visible:outline-[var(--workspace-accent)]";
-const outlineLink = "inline-flex min-h-10 items-center whitespace-nowrap rounded-lg border border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-3 text-sm font-medium hover:bg-[var(--workspace-subtle)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--workspace-accent)]";
-const labelClass = "block min-w-0 space-y-1.5 text-xs font-medium text-[var(--workspace-muted)]";
+const sessionDate = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+const sortChoices = [
+  { key: undefined, label: "Recently synced" },
+  { key: "newest", label: "Newest started" },
+  { key: "oldest", label: "Oldest started" },
+] as const;
 
 function Filters({ workspaceId, filters, data, invalid }: {
   workspaceId: string;
@@ -20,61 +24,90 @@ function Filters({ workspaceId, filters, data, invalid }: {
   invalid: boolean;
 }) {
   const home = `/workspace/${workspaceId}`;
-  const advanced = Boolean(filters.model || filters.from || filters.to);
+  const selectedRepository = data.repositories.find(({ key }) => key === filters.repository);
+  const refinements = [
+    ["repository", filters.repository && (selectedRepository?.name ?? "Unavailable repository")],
+    ["source", filters.source && sessionSourceLabel[filters.source]],
+    ["model", filters.model],
+    ["from", filters.from && `From ${filters.from}`],
+    ["to", filters.to && `Through ${filters.to}`],
+  ] as const;
+  const active = refinements.filter(([, label]) => label);
+  const clear = sessionListHref(workspaceId, { page: 1, sort: filters.sort });
+
   return (
-    <Form action={home} role="search" aria-label="Search and filter sessions" className="space-y-4 rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)] p-4 sm:p-5">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-        <label className={labelClass}>
-          <span>Search sessions</span>
-          <input className={field} type="search" name="query" placeholder="Words in a title or conversation" maxLength={200} defaultValue={filters.query} />
-        </label>
-        <button type="submit" className="min-h-10 rounded-lg bg-[var(--workspace-button)] px-5 text-sm font-semibold text-[var(--workspace-button-text)] hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--workspace-accent)]">Search</button>
-      </div>
-      <div className="grid gap-3 min-[370px]:grid-cols-2 lg:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1fr)_auto] lg:items-end">
-        <div className={labelClass}>
-          <label htmlFor="sessions-agent">Agent</label>
-          <select id="sessions-agent" name="source" defaultValue={filters.source ?? ""} className={field}>
-            <option value="">All agents</option>
-            {Object.entries(sessionSourceLabel).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
-          </select>
+    <div className={styles.controls}>
+      <Form action={home} role="search" aria-label="Search and filter sessions" className={styles.toolbar}>
+        {filters.sort && <input type="hidden" name="sort" value={filters.sort} />}
+        <div className={styles.search}>
+          <label htmlFor="session-query" className="sr-only">Search sessions</label>
+          <input id="session-query" className={styles.searchField} type="search" name="query" placeholder="Search titles and conversations" maxLength={200} defaultValue={filters.query ?? ""} />
+          <button type="submit" className={styles.control}>Search</button>
         </div>
-        <div className={labelClass}>
-          <label htmlFor="sessions-repository">Repository</label>
-          <select id="sessions-repository" name="repository" defaultValue={filters.repository ?? ""} className={field}>
-            <option value="">All repositories</option>
-            {data.repositories.map(({ key, name }) => <option key={key} value={key}>{name}</option>)}
-            {filters.repository && !data.repositories.some(({ key }) => key === filters.repository) && (
-              <option value={filters.repository}>Unavailable repository</option>
-            )}
-          </select>
-        </div>
-        {sessionHasFilters(filters) && <Link href={home} className={`${outlineLink} justify-self-start`}>Clear filters</Link>}
-      </div>
-      <details open={advanced || invalid} className="border-t border-[var(--workspace-border)] pt-3">
-        <summary className="w-fit cursor-pointer text-sm font-medium text-[var(--workspace-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2">
-          More filters <span className="ml-1 font-normal text-[var(--workspace-muted)]">· Model and dates</span>
-        </summary>
-        <div className="mt-3 grid gap-3 min-[500px]:grid-cols-2 lg:grid-cols-3">
-          <div className={labelClass}>
-            <label htmlFor="sessions-model">Model</label>
-            <select id="sessions-model" name="model" defaultValue={filters.model ?? ""} className={field}>
-              <option value="">All models</option>
-              {data.models.map((model) => <option key={model} value={model}>{model}</option>)}
-              {filters.model && !data.models.includes(filters.model) && <option value={filters.model}>{filters.model}</option>}
-            </select>
+        <SessionMenu initiallyOpen={invalid} label={<>Filters{active.length > 0 && <span className={styles.filterCount}>{active.length}</span>} <span aria-hidden="true">⌄</span></>}>
+          <div className={styles.popover}>
+            <div className={styles.filterFields}>
+              <div className={styles.label}>
+                <label htmlFor="session-repository">Repository</label>
+                <select id="session-repository" className={styles.field} name="repository" defaultValue={filters.repository ?? ""}>
+                  <option value="">All repositories</option>
+                  {data.repositories.map(({ key, name }) => <option key={key} value={key}>{name}</option>)}
+                  {filters.repository && !selectedRepository && <option value={filters.repository}>Unavailable repository</option>}
+                </select>
+              </div>
+              <div className={styles.label}>
+                <label htmlFor="session-agent">Agent</label>
+                <select id="session-agent" className={styles.field} name="source" defaultValue={filters.source ?? ""}>
+                  <option value="">All agents</option>
+                  {Object.entries(sessionSourceLabel).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+                </select>
+              </div>
+              <div className={styles.label}>
+                <label htmlFor="session-model">Model</label>
+                <select id="session-model" className={styles.field} name="model" defaultValue={filters.model ?? ""}>
+                  <option value="">All models</option>
+                  {data.models.map((model) => <option key={model} value={model}>{model}</option>)}
+                  {filters.model && !data.models.includes(filters.model) && <option value={filters.model}>{filters.model}</option>}
+                </select>
+              </div>
+              <div className={styles.filterDates}>
+                <label className={styles.label}>
+                  <span>From (UTC)</span>
+                  <input className={styles.field} type="date" name="from" defaultValue={filters.from ?? ""} />
+                </label>
+                <label className={styles.label}>
+                  <span>Through (UTC)</span>
+                  <input className={styles.field} type="date" name="to" defaultValue={filters.to ?? ""} />
+                </label>
+              </div>
+            </div>
+            <div className={styles.filterActions}>
+              {sessionHasFilters(filters) && <Link className={styles.textLink} href={clear}>Clear all</Link>}
+              <button type="submit" className={`${styles.control} ${styles.primaryControl}`}>Apply filters</button>
+            </div>
           </div>
-          <label className={labelClass}>
-            <span>From (UTC)</span>
-            <input className={field} type="date" name="from" defaultValue={filters.from} />
-          </label>
-          <label className={labelClass}>
-            <span>To (UTC)</span>
-            <input className={field} type="date" name="to" defaultValue={filters.to} />
-          </label>
+        </SessionMenu>
+        <SessionMenu label={<>Sort <span aria-hidden="true">↕</span></>}>
+          <div className={`${styles.popover} ${styles.sortMenu}`} aria-label="Sort sessions">
+            {sortChoices.map(({ key, label }) => (
+              <Link key={label} aria-current={filters.sort === key ? "true" : undefined} href={sessionListHref(workspaceId, { ...filters, sort: key, page: 1 })}>
+                {label}
+              </Link>
+            ))}
+          </div>
+        </SessionMenu>
+      </Form>
+      {!!active.length && (
+        <div className={styles.filterChips} aria-label="Active filters">
+          {active.map(([field, label]) => (
+            <Link className={styles.chip} key={field} href={sessionListHref(workspaceId, { ...filters, [field]: undefined, page: 1 })} aria-label={`Remove filter ${label}`}>
+              {label} <span aria-hidden="true">×</span>
+            </Link>
+          ))}
         </div>
-      </details>
-      {invalid && <p role="alert" className="text-sm text-[var(--workspace-muted)]">Check your filters and make sure the start date comes before or on the end date.</p>}
-    </Form>
+      )}
+      {invalid && <p role="alert" className={styles.muted}>Check the filters and make sure the start date is on or before the end date.</p>}
+    </div>
   );
 }
 
@@ -86,56 +119,68 @@ function SessionList({ id, filters, data }: {
   const pages = Math.ceil(data.total / WORKSPACE_SESSION_PAGE_SIZE);
   const first = (data.page - 1) * WORKSPACE_SESSION_PAGE_SIZE + 1;
   const last = first - 1 + data.sessions.length;
-  const query = sessionFilterParams({ ...filters, page: data.page }).toString();
+  const hasFilters = sessionHasFilters(filters);
+  const clear = sessionListHref(id, { page: 1, sort: filters.sort });
+  const pageFilters = { ...filters, page: data.page };
+
   return (
-    <section aria-labelledby="session-results" className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="session-results" className="text-base font-semibold">{sessionHasFilters(filters) ? "Search results" : "Recent sessions"}</h2>
-        <p className="text-xs tabular-nums text-[var(--workspace-muted)]" aria-live="polite">
+    <section aria-labelledby="session-results" className={styles.results}>
+      <div className={styles.resultHeader}>
+        <h2 id="session-results" className="sr-only">{hasFilters ? "Search results" : "Recent sessions"}</h2>
+        <p className={styles.muted} aria-live="polite">
           {pages > 1 ? `${formatCount(first)}–${formatCount(last)} of ` : ""}
           {formatCount(data.total)} {data.total === 1 ? "session" : "sessions"}
         </p>
+        {hasFilters && <Link className={styles.textLink} href={clear}>Clear filters</Link>}
       </div>
       {data.sessions.length ? (
-        <ul className="divide-y divide-[var(--workspace-border)] overflow-hidden rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)]">
-          {data.sessions.map((session) => (
-            <li key={session.id}>
-              <Link
-                className="block space-y-2 px-4 py-3.5 hover:bg-[var(--workspace-subtle)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--workspace-accent)] sm:px-5"
-                href={`/workspace/${id}/sessions/${session.id}${query ? `?${query}` : ""}`}
-                prefetch={false}
-              >
-                <span className="block font-medium [overflow-wrap:anywhere]">{session.title}</span>
-                <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-[var(--workspace-muted)]">
-                  <span className="rounded-md bg-[var(--workspace-accent-soft)] px-2 py-0.5 font-medium text-[var(--workspace-accent)]">
-                    {sessionSourceLabel[session.source]}
-                  </span>
-                  {session.analytics?.repository && <span className="break-all font-mono">{session.analytics.repository.name}</span>}
-                  <time className="tabular-nums" dateTime={session.startedAt} title="Session start date (UTC)">
-                    {sessionDate.format(new Date(session.startedAt))}
-                  </time>
-                  <span className="tabular-nums">{formatCount(session.messageCount)} {session.messageCount === 1 ? "message" : "messages"}</span>
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <div className={styles.list}>
+          <div className={styles.columns} aria-hidden="true">
+            <span>Session</span><span>Agent</span><span>Started (UTC)</span><span>Tokens</span><span>Est. cost</span>
+          </div>
+          <ul>
+            {data.sessions.map((session) => {
+              const usage = summarizeSession(session.analytics);
+              return (
+                <li key={session.id}>
+                  <Link className={styles.sessionRow} href={sessionDetailHref(id, session.id, pageFilters)} prefetch={false}>
+                    <span className={styles.sessionIdentity}>
+                      <span className={styles.sessionTitle}>{session.title}</span>
+                      <span className={styles.sessionMeta}>
+                        {session.analytics?.repository && <span>{session.analytics.repository.name}</span>}
+                        <span>{formatCount(session.messageCount)} {session.messageCount === 1 ? "message" : "messages"}</span>
+                      </span>
+                    </span>
+                    <span className={styles.agent}>{sessionSourceLabel[session.source]}</span>
+                    <time className={styles.sessionTime} dateTime={session.startedAt}>{sessionDate.format(new Date(session.startedAt))}</time>
+                    <span className={styles.rowMetric} aria-label={usage.tokens.value === null ? "Token count unavailable" : `${formatCount(usage.tokens.value)} reported tokens`}>
+                      {usage.tokens.value === null ? "—" : formatCount(usage.tokens.value)}
+                      {usage.tokens.value !== null && !usage.tokens.complete && <span className={styles.metricNote}>Partial</span>}
+                    </span>
+                    <span className={styles.rowMetric} aria-label={usage.cost.value === null ? "Estimated cost unavailable" : `${formatCost(usage.cost.value)} estimated cost`}>
+                      {usage.cost.value === null ? "—" : formatCost(usage.cost.value)}
+                      {usage.cost.value !== null && !usage.cost.complete && <span className={styles.metricNote}>Partial</span>}
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : (
-        <div className="space-y-2 rounded-xl border border-dashed border-[var(--workspace-border)] px-5 py-10 text-center">
-          <p className="font-medium">{sessionHasFilters(filters) ? "No matching sessions" : "No sessions yet"}</p>
-          {sessionHasFilters(filters) ? (
-            <p className="text-sm text-[var(--workspace-muted)]">Try a different search or <Link href={`/workspace/${id}`} className="text-[var(--workspace-accent)] underline underline-offset-2">clear your filters</Link>.</p>
-          ) : (
-            <p className="text-sm text-[var(--workspace-muted)]"><Link href={`/workspace/${id}/settings#sync-setup`} className="text-[var(--workspace-accent)] underline underline-offset-2">Set up sync</Link> to see your first session.</p>
+        <div className={styles.empty}>
+          <p>{hasFilters ? "No matching sessions" : "No sessions yet"}</p>
+          {hasFilters ? <Link className={styles.textLink} href={clear}>Clear filters</Link> : (
+            <Link href={`/workspace/${id}/settings/uploads#sync-setup`} className={styles.textLink}>Set up sync</Link>
           )}
         </div>
       )}
       {pages > 1 && (
-        <nav aria-label="Session pages" className="flex flex-wrap items-center justify-between gap-3">
-          <span className="text-sm tabular-nums text-[var(--workspace-muted)]">Page {data.page} of {pages}</span>
-          <div className="flex gap-2">
-            {data.page > 1 && <Link href={sessionListHref(id, { ...filters, page: data.page - 1 })} className={outlineLink}>Previous</Link>}
-            {data.page < pages && <Link href={sessionListHref(id, { ...filters, page: data.page + 1 })} className={outlineLink}>Next</Link>}
+        <nav aria-label="Session pages" className={styles.pagination}>
+          <span className={styles.muted}>Page {data.page} of {pages}</span>
+          <div>
+            {data.page > 1 && <Link href={sessionListHref(id, { ...filters, page: data.page - 1 })} className={styles.control}>Previous</Link>}
+            {data.page < pages && <Link href={sessionListHref(id, { ...filters, page: data.page + 1 })} className={styles.control}>Next</Link>}
           </div>
         </nav>
       )}
@@ -147,17 +192,19 @@ export default async function WorkspacePage({ params, searchParams }: PageProps<
   const { id } = await params;
   const { filters, invalid } = parseSessionFilters(await searchParams);
   const data = await searchWorkspaceSessions(id, filters);
-  const refresh = !sessionHasFilters(filters) && data.page === 1;
-  const firstSession = refresh && !invalid && filters.page === 1 && data.total === 0
+  const unfilteredFirstPage = !sessionHasFilters(filters) && data.page === 1;
+  const firstSession = unfilteredFirstPage && !invalid && filters.page === 1 && !filters.sort && data.total === 0
     ? await readWorkspaceAccess(id)
     : null;
 
   return (
-    <main className="space-y-6 pt-7 sm:pt-9">
+    <main className={styles.page}>
       {firstSession ? <FirstSessionSetup workspace={firstSession} approved={await hasWorkspaceCliApproval(id)} /> : (
         <>
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Sessions</h1>
-          {refresh && <RefreshSessions />}
+          <header className={styles.headingRow}>
+            <h1>Sessions</h1>
+            <SessionRefresh label="Refresh sessions" whenIdle={unfilteredFirstPage} />
+          </header>
           <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} />
           <SessionList id={id} filters={filters} data={data} />
         </>

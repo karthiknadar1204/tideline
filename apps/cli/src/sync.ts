@@ -17,6 +17,8 @@ import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin, tideline
 import { readRepository } from "./repository";
 import { redactConversationText } from "./session-safety";
 import type { LiveSession, SessionCandidate } from "./session-jsonl";
+import { openSetupConnection } from "./setup-connection";
+import type { SetupConnection } from "./setup-connection";
 import { openCollectorStorage, readBackgroundStatus, startBackgroundSync, stopBackgroundSync } from "./sync-background";
 import { chooseProjects, createApprovedScope, explicitProjects, historyStart, sameCheckout, terminalText } from "./sync-projects";
 import { configuredAgentRoots, databaseSources, databaseVersion, fileSources, isInaccessible, isWithin, readPhysicalDirectory, sessionFiles } from "./sync-sources";
@@ -40,6 +42,7 @@ type SetupOptions = {
   browser: boolean;
   credentialFile?: boolean;
   onboarding?: boolean;
+  code?: string;
 };
 
 const syncRoutes = {
@@ -60,8 +63,8 @@ async function readCurrentSetup() {
   }
 }
 
-async function enrollSync(storage: Storage, options: SetupOptions, settings: Omit<SyncConfig, "workspaceId" | "expiresAt" | "userId">) {
-  const accessToken = await approveInBrowser(options.browser);
+async function enrollSync(storage: Storage, options: SetupOptions, settings: Omit<SyncConfig, "workspaceId" | "expiresAt" | "userId">, approvedToken?: string) {
+  const accessToken = approvedToken ?? await approveInBrowser(options.browser);
   let workspaceId = options.workspace;
   if (!workspaceId) {
     const approved = await postToTideline({ apiOrigin: settings.apiOrigin, path: "/v1/cli/approve", accessToken });
@@ -88,6 +91,19 @@ async function enrollSync(storage: Storage, options: SetupOptions, settings: Omi
 }
 
 export async function setupSync(options: SetupOptions) {
+  if (options.code === undefined) return configureSync(options);
+  if (options.workspace !== undefined) throw new Error("Use the browser setup code by itself to select a workspace.");
+  if (process.platform === "win32") throw new Error("Tideline automatic sync currently requires macOS or Linux.");
+  const connection = await openSetupConnection(tidelineApiOrigin(), options.code);
+  try {
+    await configureSync({ ...options, workspace: connection.workspaceId }, connection);
+  } catch (error) {
+    await connection.update({ phase: "failed" });
+    throw error;
+  }
+}
+
+async function configureSync(options: SetupOptions, connection?: SetupConnection) {
   if (options.workspace !== undefined && !syncEnrollmentRequest.shape.workspaceId.safeParse(options.workspace).success) {
     throw new Error("Set --workspace to the destination workspace UUID.");
   }
@@ -118,10 +134,29 @@ export async function setupSync(options: SetupOptions) {
   }
   const selection = options.project?.length ? {
     projects: await explicitProjects(options.project), history: options.history ?? false, background: options.background ?? false,
-  } : await chooseProjects(roots, previous?.projects ?? [], { ...options, allowEmpty: Boolean(previous) });
+  } : await chooseProjects(roots, previous?.projects ?? [], {
+    ...options,
+    allowEmpty: Boolean(previous) && !connection,
+    onDiscovered: connection && (async (repositoriesFound, localSessionsFound) => {
+      await connection.update({ phase: "choosing", repositoriesFound, localSessionsFound });
+    }),
+  });
   if (!selection) {
+    await connection?.update({ phase: "cancelled" });
     console.info("Setup canceled.");
     return;
+  }
+  let approvedToken: string | undefined;
+  if (connection) {
+    if (!await connection.update({ phase: "approving", checkoutsSelected: selection.projects.length, history: selection.history })) {
+      throw new Error("This setup connection expired or became unavailable. Copy a fresh command from Tideline.");
+    }
+    console.info("Approve with the account that opened this setup page.");
+    const approval = await connection.approve(options.browser);
+    if (previous && previous.userId !== approval.userId) {
+      throw new Error("This collector was set up with a different account or an older CLI. Revoke it before pairing again.");
+    }
+    approvedToken = approval.accessToken;
   }
 
   if (previous) await stopBackgroundSync({ quiet: true });
@@ -144,12 +179,12 @@ export async function setupSync(options: SetupOptions) {
       console.info(`Syncing ${projects.length} ${projects.length === 1 ? "project" : "projects"} from ${sources.join(", ")} to ${destination} at ${apiOrigin}.`);
       if (selection.history) console.info("This approval includes older sessions.");
       if (useLocalCredential) console.info("Tideline will store the sync credential in an owner-only file on this computer.");
-      if (options.onboarding) console.info("Sign in and approve this collector in your browser.");
+      if (options.onboarding && !connection) console.info("Sign in and approve this collector in your browser.");
       workspaceId = await enrollSync(storage, options, {
         apiOrigin, projects, startedAt: now, account: randomUUID(), credentialStore: credentialFile ? "file" : "keychain",
         codexRoot: roots.codexRoot, codexArchiveRoot: roots.codexArchiveRoot,
         claudeRoot: roots.claudeRoot, cursorRoot: roots.cursorRoot, openCodeRoot: roots.openCodeRoot,
-      });
+      }, approvedToken);
     }
   } finally {
     storage.close();
@@ -160,9 +195,12 @@ export async function setupSync(options: SetupOptions) {
   }
   if (selection.background) await startBackgroundSync();
   else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
+  if (connection && !await connection.update({ phase: "ready", checkoutsSelected: selection.projects.length, background: selection.background })) {
+    console.warn("Sync setup succeeded. The browser setup page could not be updated.");
+  }
 
   if (webOrigin) {
-    console.info(`Open your dashboard at ${new URL(`/workspace/${workspaceId}`, webOrigin).href}`);
+    console.info(`Open your dashboard at ${new URL(`/workspace/${workspaceId}/dashboard`, webOrigin).href}`);
     console.info("Sessions appear in the dashboard after they finish syncing.");
     if (!selection.history) console.info("Start a new agent session in a selected repository to see it there.");
   }

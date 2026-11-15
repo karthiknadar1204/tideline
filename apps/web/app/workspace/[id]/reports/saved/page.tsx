@@ -2,6 +2,7 @@ import { savedReportPage } from "@tideline/contracts";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { formatSavedReportDate, listSavedReports, savedReportVisibilityLabel } from "../../../../../lib/saved-reports";
+import { ReportNavigation } from "../report-navigation";
 
 export default async function SavedReportsPage({ params, searchParams }: PageProps<"/workspace/[id]/reports/saved">) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
@@ -14,9 +15,10 @@ export default async function SavedReportsPage({ params, searchParams }: PagePro
   return (
     <main className="space-y-6 pt-7 sm:pt-9">
       <header className="space-y-2">
-        <Link className="text-sm text-[var(--workspace-accent)] underline underline-offset-4" href={`${workspace}/reports`}>Usage reports</Link>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Saved reports</h1>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Reports</h1>
+        <p className="text-sm text-[var(--workspace-muted)]">Reports saved by you or shared with this workspace.</p>
       </header>
+      <ReportNavigation workspaceId={id} active="saved" />
       {list.reports.length ? (
         <ul className="divide-y divide-[var(--workspace-border)] overflow-hidden rounded-xl border border-[var(--workspace-border)] bg-[var(--workspace-panel)]" aria-label="Saved reports">
           {list.reports.map((report) => (
@@ -35,7 +37,7 @@ export default async function SavedReportsPage({ params, searchParams }: PagePro
         <section className="rounded-xl border border-dashed border-[var(--workspace-border)] bg-[var(--workspace-panel)] px-5 py-12 text-center" aria-labelledby="saved-reports-empty">
           <h2 className="font-semibold" id="saved-reports-empty">No saved reports</h2>
           <p className="mt-2 text-sm text-[var(--workspace-muted)]">Connect an agent to Tideline MCP and ask it to save a report.</p>
-          <Link className="mt-4 inline-block text-sm font-medium text-[var(--workspace-accent)] underline underline-offset-4" href={`${workspace}/settings#mcp-setup`}>Set up MCP</Link>
+          <Link className="mt-4 inline-block text-sm font-medium text-[var(--workspace-accent)] underline underline-offset-4" href={`${workspace}/settings/integrations`}>Set up MCP</Link>
         </section>
       )}
       {(page > 1 || list.nextPage) && (

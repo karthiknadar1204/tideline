@@ -17,5 +17,5 @@ export async function createTeamWorkspace(_previous: TeamActionState, form: Form
   if (!response?.ok) return { kind: "error", message: "Could not create the workspace. Try again." };
 
   const workspace = workspaceAccess.parse(await response.json());
-  redirect(`/workspace/${workspace.id}`);
+  redirect(`/workspace/${workspace.id}/dashboard`);
 }

@@ -137,13 +137,14 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
   let throughLine = 0;
   let truncated = false;
 
-  function writeTool(id: string, name: string, status: ToolCall["status"], line: number) {
+  function writeTool(id: string, name: string, status: ToolCall["status"], line: number, mcpServer?: string) {
     throughLine = line;
     const existing = tools.get(id);
     if (existing) {
       if (existing.status === "called" || status === "failed") existing.status = status;
+      if (mcpServer) existing.mcpServer ??= mcpServer;
     } else if (tools.size < MAX_SESSION_ACTIVITY_ITEMS) {
-      tools.set(id, { line, index: 0, name, status });
+      tools.set(id, { line, index: 0, name, status, ...(mcpServer && { mcpServer }) });
     } else {
       truncated = true;
     }
@@ -298,7 +299,8 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       item.type === "DynamicToolCall" ? qualifiedName(item.namespace, item.tool) :
       item.type === "FunctionCallOutput" ? qualifiedName(item.namespace, item.name) : undefined
     );
-    if (name) writeTool(item.id, tools.get(item.id)?.name ?? name, status, line);
+    if (name) writeTool(item.id, tools.get(item.id)?.name ?? name, status, line,
+      item.type === "McpToolCall" ? safeName(item.server) : undefined);
   }
 
   function skill(value: string, line: number, index: number) {

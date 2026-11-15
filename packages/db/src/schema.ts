@@ -1,5 +1,5 @@
 import { savedReportVisibility as savedReportVisibilityContract, sessionSource as sessionSourceContract } from "@tideline/contracts";
-import type { SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, SharedSessionSnapshot, UsageGoal } from "@tideline/contracts";
+import type { CliSetupProgress, SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, SharedSessionSnapshot, UsageGoal } from "@tideline/contracts";
 import { sql } from "drizzle-orm";
 import { check, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
@@ -17,6 +17,16 @@ export const workspaces = pgTable("workspaces", {
   uniqueIndex("workspaces_personal_owner_unique").on(table.ownerId).where(sql`${table.kind} = 'personal'`),
   index("workspaces_owner_index").on(table.ownerId),
 ]);
+
+export const cliSetups = pgTable("cli_setups", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull(),
+  codeHash: text("code_hash").notNull().unique(),
+  writerHash: text("writer_hash"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  progress: jsonb("progress").$type<CliSetupProgress>().notNull(),
+}, (table) => [index("cli_setups_expiry_index").on(table.expiresAt)]);
 
 export const workspaceMembers = pgTable("workspace_members", {
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

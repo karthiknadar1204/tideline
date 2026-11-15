@@ -27,6 +27,10 @@ export function cliInstallCommand(workspaceId?: string) {
   return workspaceId ? `${command} -s -- --workspace ${shellQuote(workspaceId)}` : command;
 }
 
+export function cliPairedInstallCommand(code: string) {
+  return `${cliInstallCommand()} -s -- --code ${shellQuote(code)}`;
+}
+
 export async function cliInstaller() {
   const response = await fetchTidelineApi("/cli/install-config");
   const config = cliInstallConfig.safeParse(response?.ok ? await response.json().catch(() => undefined) : undefined);
