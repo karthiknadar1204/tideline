@@ -124,9 +124,11 @@ export async function RepositoryInstructions({ workspaceId, repository }: { work
   const response = await fetchWorkspaceResource(`${encodeURIComponent(workspaceId)}/repositories/${repository}/instructions`);
   const result = repositoryInstructionsResponse.safeParse(response?.ok ? await response.json() : undefined).data;
   const revision = result?.snapshot.context?.revision ?? result?.snapshot.revision;
+  const trackedChanges = result?.snapshot.context?.trackedChanges;
   const groups = [
     { kind: "skill", title: "Skills" }, { kind: "agent", title: "Agent definitions" },
-    { kind: "config", title: "Agent and MCP configuration" }, { kind: "resource", title: "Skill resources" },
+    { kind: "config", title: "Agent and MCP configuration" }, { kind: "package", title: "Package configuration" },
+    { kind: "resource", title: "Skill resources" },
   ] as const;
 
   return (
@@ -139,6 +141,7 @@ export async function RepositoryInstructions({ workspaceId, repository }: { work
               {revision && <> · HEAD <code title={revision}>{revision.slice(0, 8)}</code></>}
             </p>
           )}
+          {trackedChanges && <p>{formatCount(trackedChanges.staged)} staged · {formatCount(trackedChanges.unstaged)} unstaged tracked files</p>}
           {(result?.snapshot.partial || result?.snapshot.context?.partial) && <p>Some files were unavailable or exceeded capture limits.</p>}
         </div>
       </header>
@@ -181,6 +184,12 @@ export async function RepositoryInstructions({ workspaceId, repository }: { work
                               <div><dt>File size</dt><dd>{entry.bytes.toLocaleString("en-US")} bytes</dd></div>
                               <div><dt>Collector fingerprint</dt><dd><code>{entry.fingerprint}</code></dd></div>
                               {entry.kind === "resource" && <div><dt>Skill definition</dt><dd><code>{entry.definitionPath}</code></dd></div>}
+                              {entry.kind === "config" && entry.mcpServers !== undefined && <div><dt>MCP servers</dt><dd>{formatCount(entry.mcpServers)}</dd></div>}
+                              {entry.kind === "package" && entry.summary && <>
+                                <div><dt>Dependencies</dt><dd>{formatCount(entry.summary.dependencies)}</dd></div>
+                                <div><dt>Dev dependencies</dt><dd>{formatCount(entry.summary.developmentDependencies)}</dd></div>
+                                <div><dt>Scripts</dt><dd>{formatCount(entry.summary.scripts)}</dd></div>
+                              </>}
                             </dl>
                           )}
                         </details>

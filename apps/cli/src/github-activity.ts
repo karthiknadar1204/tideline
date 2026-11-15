@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { githubActivityReceipt, githubActivityUpload } from "@tideline/contracts";
 import { z } from "zod";
+import { syncGitHubEvidence } from "./github-evidence";
 import { openCliAccount } from "./cli-account";
 import { postToTideline, readJson } from "./login";
 import { createRepositoryGit, readOrigin } from "./repository";
@@ -61,7 +62,9 @@ export async function syncGitHub({ project, workspace }: { project: string; work
   const account = await openCliAccount({ workspace });
   const upload = await readActivity(repository);
   const result = await account.post(`/v1/cli/workspaces/${account.workspaceId}/github-activity`, upload, githubActivityReceipt);
-  console.log(`Synced ${result.received} GitHub events from ${repository}.`);
+  const linked = await syncGitHubEvidence(repository, (body) =>
+    account.post(`/v1/cli/workspaces/${account.workspaceId}/github-evidence`, body, z.unknown()));
+  console.log(`Synced ${result.received} GitHub events and checked ${linked} commits in ${repository}.`);
 }
 
 const refreshMs = 15 * 60_000;
@@ -78,7 +81,7 @@ export function createGitHubActivitySync(config: SyncConfig, storage: Awaited<Re
       if (signal.aborted) return;
       if (!repository || now < (nextAttempt.get(project.directory) ?? 0)) continue;
       const prior = storage.githubCollection(config.account, repository);
-      if (prior && now - prior.checkedAt < refreshMs) continue;
+      if (!scanAll && prior && now - prior.checkedAt < refreshMs) continue;
       nextAttempt.set(project.directory, now + retryMs);
       const scope = createApprovedScope([project]);
       const verified = await scope.projectScope(project.directory);
@@ -95,6 +98,15 @@ export function createGitHubActivitySync(config: SyncConfig, storage: Awaited<Re
             throw new Error("Upload failed.");
           }
         }
+        await syncGitHubEvidence(repository, async (body) => {
+          if (await readGitHubRepository(verified) !== repository || signal.aborted) throw new Error("GitHub origin changed.");
+          const response = await postToTideline({
+            apiOrigin: config.apiOrigin, path: `/v1/cli/sync/workspaces/${config.workspaceId}/github-evidence`,
+            accessToken, body: JSON.stringify(body), signal,
+          });
+          if (!response?.ok) throw new Error("Could not sync GitHub commit evidence.");
+          return readJson(response);
+        }, signal);
         storage.markGitHubCollection(config.account, repository, fingerprint, Date.now());
       } catch {
         if (!signal.aborted) console.warn("GitHub activity could not sync. Check gh auth status or repository access and try again.");

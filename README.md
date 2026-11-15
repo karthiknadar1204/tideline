@@ -84,7 +84,7 @@ Tideline checks local session files and databases about every two seconds. The l
 
 **Settings → General** shows sync coverage. Collectors send an inventory at startup and every 30 minutes while running. It contains session IDs, agent names, and start times for approved sessions. The workspace compares those IDs with sessions it received. **Settings → Uploads** uses repository names and hashed IDs from the same report to show enabled, paused, and unreported repositories. Set `TIDELINE_SESSION_INVENTORY=0` in the collector environment to turn both reports off. The collector clears its previous report when it next connects. Agents can check coverage through the MCP tool `sync_coverage`.
 
-For Codex and Claude Code, run `tideline sync setup --session-details` to include tool input and output text, recorded file diffs, and selected setup metadata. The collector redacts common credential patterns. Add `--repository-instructions` to sync supported instruction files from selected checkouts. Use `--repository-context` separately to sync redacted skill and agent definitions plus the paths, file sizes, and collector fingerprints of supported configurations and skill resources. **Repositories → Context** shows the latest snapshot.
+For Codex and Claude Code, run `tideline sync setup --session-details` to include tool input and output text, recorded file diffs, and selected setup metadata. The collector redacts common credential patterns. Add `--repository-instructions` to sync supported instruction files from selected checkouts. Use `--repository-context` to sync redacted skill and agent definitions, tracked change counts, and metadata about supported agent, package, and skill files. **Repositories → Context** shows the latest snapshot.
 
 With session details enabled, use `--subagent-transcripts` to collect bounded excerpts of linked Codex and Claude Code child conversations up to four levels deep. Open the parent session and select **Subagents** to read them.
 
@@ -138,7 +138,7 @@ In **Sessions**, search by title, a phrase from a processed conversation, or its
 
 ## Run a usage report
 
-From a GitHub checkout, run `tideline github sync` after signing in with `gh auth login` and `tideline login`. The command imports up to 100 recent merged pull requests and 100 recent GitHub Actions runs. Open **Reports → GitHub** to filter and open those records.
+From a GitHub checkout, run `tideline github sync` after signing in with `gh auth login` and `tideline login`. The command imports up to 100 recent merged pull requests and 100 recent GitHub Actions runs. Open **Reports → GitHub** to filter and open those records. Open a session’s **Review** tab to see the pull requests, workflow runs, and individual CI jobs GitHub associates with the session’s verified commits. Older synced sessions can pick up these links on the next GitHub sync.
 
 Run `tideline sync setup --github-activity` to opt the selected GitHub checkouts into automatic collection. Tideline checks approved origins about every 15 minutes and uploads changed results through the collector's workspace credential. GitHub authentication stays in the local `gh` installation. A changed origin needs a new approval. Run `tideline sync setup --no-github-activity` to stop automatic collection while keeping session sync.
 

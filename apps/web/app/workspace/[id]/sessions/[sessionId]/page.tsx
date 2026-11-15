@@ -16,6 +16,7 @@ import { SessionReader } from "./reader";
 import { SessionShare } from "./session-share";
 import { SessionSubagents } from "./subagents";
 import { FullTranscript } from "./full-transcript";
+import { SessionGitHubEvidence } from "./github-evidence";
 import { buildSessionTimeline } from "./timeline";
 
 const startedDate = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
@@ -157,7 +158,14 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
           files: <SessionFiles capture={session.capture} source={session.source} />,
           setup: <SessionSetup capture={session.capture} session={session} />,
           usage: <SessionUsage analytics={session.analytics} />,
-          review: <SessionReview review={session.review} />,
+          review: (
+            <>
+              <SessionReview review={session.review} />
+              <Suspense fallback={null}>
+                <div className="mt-8"><SessionGitHubEvidence workspaceId={id} sessionId={sessionId} review={session.review} /></div>
+              </Suspense>
+            </>
+          ),
         }}
       />
     </main>

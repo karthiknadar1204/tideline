@@ -808,13 +808,18 @@ export const repositoryAgentRootExtensions = {
   ".claude/agents": ".md", ".codex/agents": ".toml", ".cursor/agents": ".md", ".opencode/agents": ".md", ".opencode/agent": ".md",
 } as const;
 export const repositoryConfigPaths: readonly string[] = [
-  ".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", ".cursor/mcp.json",
+  ".mcp.json", "mcp.json", "mcp-config.json", ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", ".cursor/mcp.json",
   ".vscode/mcp.json", "opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc",
 ];
+export const repositoryPackagePaths: readonly string[] = [
+  "package.json", "Cargo.toml", "go.mod", "pyproject.toml", "Gemfile", "composer.json", "pom.xml",
+  "build.gradle", "build.gradle.kts", "deno.json", "deno.jsonc", "turbo.json",
+];
 
-export function repositoryContextKind(path: string): "skill" | "agent" | "config" | "resource" | undefined {
+export function repositoryContextKind(path: string): "skill" | "agent" | "config" | "resource" | "package" | undefined {
   if (!capturePath.safeParse(path).success || /(?:^|\/)(?:node_modules|vendor|dist|build|coverage)(?:\/|$)/iu.test(path)) return;
   if (repositoryConfigPaths.includes(path)) return "config";
+  if (repositoryPackagePaths.includes(path)) return "package";
   for (const [root, extension] of Object.entries(repositoryAgentRootExtensions)) {
     if (path.startsWith(`${root}/`) && path.endsWith(extension) && path.split("/").slice(2).every((part) => !part.startsWith("."))) return "agent";
   }
@@ -837,13 +842,18 @@ const repositoryRevision = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u).
 const contextEntryPath = (kind: NonNullable<ReturnType<typeof repositoryContextKind>>) => capturePath.refine((path) => repositoryContextKind(path) === kind);
 const contextFileMetadata = { bytes: z.int().nonnegative().max(MAX_REPOSITORY_CONTEXT_METADATA_BYTES),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/u) };
+const summaryCount = z.int().nonnegative().max(MAX_REPOSITORY_CONTEXT_METADATA_BYTES);
 const repositoryContextEntry = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("skill"), path: contextEntryPath("skill"), content: instructionDocument.shape.content }),
   z.strictObject({ kind: z.literal("agent"), path: contextEntryPath("agent"), content: instructionDocument.shape.content }),
-  z.strictObject({ kind: z.literal("config"), path: contextEntryPath("config"), ...contextFileMetadata }),
+  z.strictObject({ kind: z.literal("config"), path: contextEntryPath("config"), ...contextFileMetadata, mcpServers: summaryCount.optional() }),
+  z.strictObject({ kind: z.literal("package"), path: contextEntryPath("package"), ...contextFileMetadata,
+    summary: z.strictObject({ dependencies: summaryCount, developmentDependencies: summaryCount, scripts: summaryCount }).optional() }),
   z.strictObject({ kind: z.literal("resource"), path: contextEntryPath("resource"), definitionPath: contextEntryPath("skill"), ...contextFileMetadata }),
 ]);
-const repositoryContextSnapshot = z.strictObject({ revision: repositoryRevision, partial: z.boolean(), entries: z.array(repositoryContextEntry).max(MAX_REPOSITORY_CONTEXT_ENTRIES) })
+const repositoryContextSnapshot = z.strictObject({ revision: repositoryRevision, partial: z.boolean(),
+  trackedChanges: z.strictObject({ staged: summaryCount, unstaged: summaryCount }).optional(),
+  entries: z.array(repositoryContextEntry).max(MAX_REPOSITORY_CONTEXT_ENTRIES) })
   .refine(({ entries }) => {
     const paths = new Set(entries.map(({ path }) => path));
     return paths.size === entries.length && entries.every((item) => item.kind !== "resource" || (

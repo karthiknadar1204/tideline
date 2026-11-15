@@ -6,7 +6,7 @@ import {
   MAX_REPOSITORY_INSTRUCTION_FILE_BYTES, MAX_REPOSITORY_INSTRUCTION_FILES,
   MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES, repositoryInstructionPath, repositoryInstructionSnapshot,
   MAX_REPOSITORY_CONTEXT_ENTRIES, MAX_REPOSITORY_CONTEXT_METADATA_BYTES, repositoryAgentRootExtensions,
-  repositoryConfigPaths, repositoryContextKind, repositorySkillRoots,
+  repositoryConfigPaths, repositoryContextKind, repositoryPackagePaths, repositorySkillRoots,
 } from "@tideline/contracts";
 import type { RepositoryContextEntry, RepositoryInstructionSnapshot } from "@tideline/contracts";
 import { postToTideline } from "./login";
@@ -18,7 +18,7 @@ const refreshMs = 30_000;
 const names = ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"];
 const pathspecs = names.map((name) => `:(glob)**/${name}`);
 const contextPathspecs = [...repositorySkillRoots, ...Object.keys(repositoryAgentRootExtensions)].map((root) => `:(glob)${root}/**`)
-  .concat(repositoryConfigPaths.map((path) => `:(literal)${path}`));
+  .concat([...repositoryConfigPaths, ...repositoryPackagePaths].map((path) => `:(literal)${path}`));
 const rootNames = names.flatMap((name) => [name, `.claude/${name}`, `.codex/${name}`]);
 const safeRevision = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
@@ -66,10 +66,36 @@ function safePath(path: string) {
   return !isSensitiveFile(path) && redactCaptureText(path) === path;
 }
 
-async function captureContext(directory: string, listed: string | undefined, revision: string | null, key: string) {
+function trackedChanges(status: string) {
+  const records = status.split("\0");
+  const changes = { staged: 0, unstaged: 0 };
+  for (let i = 0; i < records.length - 1; i++) {
+    const [index, worktree] = records[i];
+    if (index !== " ") changes.staged++;
+    if (worktree !== " ") changes.unstaged++;
+    if (index === "R" || index === "C" || worktree === "R" || worktree === "C") i++;
+  }
+  return changes;
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+}
+
+function readJsonMetadata(bytes: Buffer) {
+  try {
+    return jsonObject(JSON.parse(bytes.toString("utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+async function captureContext(directory: string, listed: string | undefined, status: string | undefined,
+  revision: string | null, key: string) {
   const entries: RepositoryContextEntry[] = [];
-  const context = { revision, entries, partial: listed === undefined };
-  const priorities = { skill: 0, agent: 1, config: 2, resource: 3 };
+  const context = { revision, entries, partial: listed === undefined || status === undefined,
+    trackedChanges: status === undefined ? undefined : trackedChanges(status) };
+  const priorities = { skill: 0, agent: 1, config: 2, package: 3, resource: 4 };
   const candidates = [...new Set(listed?.split("\0") ?? [])].flatMap((path) => {
     const kind = repositoryContextKind(path);
     return kind ? [{ path, kind }] : [];
@@ -97,7 +123,19 @@ async function captureContext(directory: string, listed: string | undefined, rev
       const fingerprint = createHmac("sha256", key).update(path).update("\0").update(bytes).digest("hex");
       const metadata = { path, bytes: bytes.length, fingerprint };
       if (kind === "resource" && definitionPath) entries.push({ ...metadata, definitionPath, kind });
-      else entries.push({ ...metadata, kind: "config" });
+      if (kind === "config") {
+        const mcp = readJsonMetadata(bytes);
+        const servers = jsonObject(mcp?.mcpServers) ?? jsonObject(mcp?.mcp);
+        entries.push({ ...metadata, kind, mcpServers: servers ? Object.keys(servers).length : undefined });
+      }
+      if (kind === "package") {
+        const manifest = path === "package.json" ? readJsonMetadata(bytes) : undefined;
+        entries.push({ ...metadata, kind, summary: manifest ? {
+          dependencies: Object.keys(jsonObject(manifest.dependencies) ?? {}).length,
+          developmentDependencies: Object.keys(jsonObject(manifest.devDependencies) ?? {}).length,
+          scripts: Object.keys(jsonObject(manifest.scripts) ?? {}).length,
+        } : undefined });
+      }
     }
     if (Buffer.byteLength(JSON.stringify(context)) > MAX_REPOSITORY_INSTRUCTION_SNAPSHOT_BYTES - 16) {
       entries.pop();
@@ -112,10 +150,12 @@ async function captureContext(directory: string, listed: string | undefined, rev
 export async function captureRepositoryInstructions(directory: string, selection: { instructions: boolean; contextKey?: string } = { instructions: true }) {
   if (await realpath(directory).catch(() => undefined) !== directory) return;
   const git = createRepositoryGit(directory, { maxBuffer: 256 * 1024, raw: true });
-  const [listed, contextFiles, revisionText] = await Promise.all([
+  const [listed, contextFiles, revisionText, status] = await Promise.all([
     selection.instructions ? git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...pathspecs) : undefined,
     selection.contextKey ? git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...contextPathspecs) : undefined,
     git("rev-parse", "--verify", "HEAD"),
+    selection.contextKey ? git("-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain=v1", "-z",
+      "--untracked-files=no", "--ignore-submodules=all") : undefined,
   ]);
   const head = revisionText?.trim();
   const revision = head && safeRevision.test(head) ? head : null;
@@ -144,7 +184,7 @@ export async function captureRepositoryInstructions(directory: string, selection
       break;
     }
   }
-  if (selection.contextKey) snapshot.context = await captureContext(directory, contextFiles, revision, selection.contextKey);
+  if (selection.contextKey) snapshot.context = await captureContext(directory, contextFiles, status, revision, selection.contextKey);
   return repositoryInstructionSnapshot.parse(snapshot);
 }
 

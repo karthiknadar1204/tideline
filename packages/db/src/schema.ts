@@ -1,3 +1,4 @@
+import type { GitHubCommitEvidence } from "@tideline/contracts/github-evidence";
 import type { TranscriptRecord } from "@tideline/contracts/transcripts";
 import { savedReportVisibility as savedReportVisibilityContract, sessionSource as sessionSourceContract } from "@tideline/contracts";
 import type { BillingSubscriptionStatus, CliSetupProgress, DigestCadence, GitHubActivityEvent, RepositoryInstructionSnapshot, SessionActivity, SessionAnalytics, SessionCapture, SessionImportRequest, SessionReview, SharedSessionSnapshot, SyncInventoryUpload, UsageGoal } from "@tideline/contracts";
@@ -94,6 +95,16 @@ export const githubActivityEvents = pgTable("github_activity_events", {
 }, (table) => [
   primaryKey({ columns: [table.workspaceId, table.repositoryKey, table.kind, table.externalId] }),
   index("github_activity_workspace_date_index").on(table.workspaceId, table.happenedAt),
+]);
+
+export const githubCommitEvidence = pgTable("github_commit_evidence", {
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  repository: text("repository").notNull(),
+  sha: text("sha").notNull(),
+  evidence: jsonb("evidence").$type<GitHubCommitEvidence>().notNull(),
+  checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.workspaceId, table.repository, table.sha] }),
 ]);
 
 export const workspaceMembers = pgTable("workspace_members", {

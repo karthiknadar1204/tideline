@@ -2,6 +2,7 @@ import { and, count, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import type { GitHubActivityQuery, GitHubActivityUpload } from "@tideline/contracts";
+import { createGitHubEvidence } from "./github-evidence";
 import { githubActivityEvents, syncGrants, workspaces } from "./schema";
 import { activeSyncGrant } from "./sync-grant";
 import { workspaceAccessibleTo } from "./workspaces";
@@ -26,6 +27,7 @@ export function createGitHubActivityStore(databaseUrl: string) {
   }
 
   return {
+    ...createGitHubEvidence(db),
     async record(activity: Activity, userId: string) {
       return db.transaction(async (transaction) => {
         const [access] = await transaction.select({ id: workspaces.id }).from(workspaces)

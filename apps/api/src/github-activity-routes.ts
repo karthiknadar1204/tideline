@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { githubActivityQuery, githubActivityResponse, githubActivitySyncUpload, githubActivityUpload, workspaceResponse } from "@tideline/contracts";
+import { githubEvidenceAction, githubEvidenceTargets } from "@tideline/contracts/github-evidence";
 import type { createGitHubActivityStore } from "@tideline/db/github-activity";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -51,4 +52,31 @@ export function registerGitHubActivityRoutes(
     if (status.kind === "foreign-workspace") return context.json({ error: "Workspace not found." }, 404);
     return context.json(status.receipt);
   });
+  async function readOrWriteEvidence(context: Context<WorkspaceContext>, workspaceId: string, access: { userId: string } | { tokenHash: string }) {
+    const request = githubEvidenceAction.safeParse(await context.req.json().catch(() => null));
+    if (!request.success) return context.json({ error: "Invalid GitHub evidence." }, 400);
+    const { data } = request;
+    if (data.action === "targets") {
+      const targets = await store.evidenceTargets(workspaceId, data.repository, access, "userId" in access);
+      return targets ? context.json(githubEvidenceTargets.parse(targets)) : context.json({ error: "Workspace not found." }, 404);
+    }
+    const { repository, commits } = data.evidence;
+    const receipt = await store.recordEvidence(workspaceId, repository, commits, access);
+    return receipt ? context.json(receipt) : context.json({ error: "Workspace not found." }, 404);
+  }
+
+  routes.post("/cli/workspaces/:workspaceId/github-evidence", requireCli, limit, async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    if (!workspaceId.success) return context.json({ error: "Workspace not found." }, 404);
+    return readOrWriteEvidence(context, workspaceId.data.toLowerCase(), { userId: context.get("cliAccount").userId });
+  });
+
+  routes.post("/cli/sync/workspaces/:workspaceId/github-evidence", limit, async (context) => {
+    const tokenHash = parseSyncAuthorization(context.req.header("Authorization"));
+    if (!tokenHash) return context.json({ error: "A sync credential is required." }, 401);
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId"));
+    if (!workspaceId.success) return context.json({ error: "Workspace not found." }, 404);
+    return readOrWriteEvidence(context, workspaceId.data.toLowerCase(), { tokenHash });
+  });
+
 }

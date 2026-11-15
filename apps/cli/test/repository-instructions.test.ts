@@ -60,6 +60,7 @@ test("expanded repository context uses a separate opt-in and never sends config 
     ".cursor/skills/changelog/SKILL.md": "Summarize changes.",
     ".opencode/agents/verify.md": "Check the release log.",
     ".mcp.json": '{"mcpServers":{"fixture":{"env":{"token":"MCP-PRIVATE-PASSWORD"}}}}',
+    "package.json": '{"dependencies":{"PRIVATE-PACKAGE":"0.1.0"},"devDependencies":{"dev-package":"1.0.0"},"scripts":{"check":"PRIVATE-COMMAND"}}',
     ".cursor/mcp.json": '{"mcpServers":{}}',
     "opencode.jsonc": '{"mcp":{}}',
     "src/SKILL.md": "UNRECOGNIZED-SKILL-SCOPE",
@@ -71,6 +72,8 @@ test("expanded repository context uses a separate opt-in and never sends config 
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, text);
   }
+  execFileSync("git", ["add", "package.json"], { cwd: directory });
+  await writeFile(join(directory, "package.json"), files["package.json"] + "\n");
   await symlink(join(directory, "AGENTS.md"), join(directory, ".claude/agents/linked.md"));
 
   const defaultScope = await captureRepositoryInstructions(directory);
@@ -82,14 +85,18 @@ test("expanded repository context uses a separate opt-in and never sends config 
   assert.deepEqual(snapshot.documents, []);
   assert.equal(snapshot.context.partial, true);
   const serialized = JSON.stringify(snapshot);
-  assert.doesNotMatch(serialized, /MCP-PRIVATE-PASSWORD|PRIVATE-RESOURCE-CONTENTS|PRIVATE-CREDENTIAL-FILE|IGNORED-CONFIG|UNRECOGNIZED-SKILL-SCOPE|ghp_/);
+  assert.doesNotMatch(serialized, /MCP-PRIVATE-PASSWORD|PRIVATE-RESOURCE-CONTENTS|PRIVATE-CREDENTIAL-FILE|IGNORED-CONFIG|UNRECOGNIZED-SKILL-SCOPE|PRIVATE-PACKAGE|PRIVATE-COMMAND|ghp_/);
   assert.doesNotMatch(serialized, /huge\.txt|helpers\.sh|linked\.md|settings\.local\.json/);
   const entries = snapshot.context.entries;
   const config = entries.find((entry) => entry.path === ".mcp.json");
   assert.equal(config?.kind, "config");
   assert(config?.kind === "config");
   assert.equal(config.bytes, Buffer.byteLength(files[".mcp.json"]));
+  assert.equal(config.mcpServers, 1);
   assert.match(config.fingerprint, /^[0-9a-f]{64}$/);
+  const manifest = entries.find((entry) => entry.path === "package.json");
+  assert.deepEqual(manifest?.kind === "package" && manifest.summary, { dependencies: 1, developmentDependencies: 1, scripts: 1 });
+  assert.deepEqual(snapshot.context.trackedChanges, { staged: 1, unstaged: 1 });
   const resource = entries.find((entry) => entry.kind === "resource");
   assert.equal(resource?.kind === "resource" && resource.definitionPath, ".agents/skills/deploy/SKILL.md");
   assert.deepEqual(entries.filter(({ kind }) => kind === "agent").map(({ path }) => path), [

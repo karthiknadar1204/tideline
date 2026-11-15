@@ -240,7 +240,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   if (subagentTranscripts) console.info("Redacted subagent conversations are enabled for Codex and Claude Code.");
   if (fullTranscripts) console.info("Full transcripts and recorded image attachments are enabled for Codex and Claude Code.");
   if (repositoryInstructions) console.info("Redacted repository instruction snapshots are enabled for the selected Git checkouts.");
-  if (repositoryContext) console.info("Repository context is enabled for selected Git checkouts. Skill and agent text is redacted. Configs and skill resources include file metadata.");
+  if (repositoryContext) console.info("Repository context is enabled for selected Git checkouts. Tideline sends redacted definitions, file metadata, and counts for tracked changes and recognized configurations.");
   if (options.githubActivity) console.info("GitHub activity is enabled for selected checkouts with a github.com origin. Run gh auth login if needed.");
   if (selection.background) await startBackgroundSync();
   else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");

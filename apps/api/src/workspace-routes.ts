@@ -1,3 +1,4 @@
+import { sessionGitHubEvidence } from "@tideline/contracts/github-evidence";
 import { createHash, randomBytes } from "node:crypto";
 import { createClerkClient } from "@clerk/backend";
 import { parsePublishableKey } from "@clerk/shared/keys";
@@ -366,6 +367,17 @@ export function createWorkspaceRoutes() {
     }
     context.header("Cache-Control", "private, no-store");
     return context.json(workspaceSessionDetailResponse.parse({ ...priceSession(session), capture: session.capture ?? null }));
+  });
+
+  routes.get("/workspaces/:workspaceId/sessions/:sessionId/github-evidence", async (context) => {
+    const workspaceId = workspaceResponse.shape.id.safeParse(context.req.param("workspaceId")).data;
+    const sessionId = workspaceResponse.shape.id.safeParse(context.req.param("sessionId")).data;
+    if (!workspaceId || !sessionId || !await workspaces.findAccessible({ workspaceId, userId: context.get("userId") })) {
+      return context.json({ error: "Session not found." }, 404);
+    }
+    const session = await sessions.findReady(workspaceId, sessionId);
+    if (!session) return context.json({ error: "Session not found." }, 404);
+    return context.json(sessionGitHubEvidence.parse(await services.githubActivity.evidenceForSession(workspaceId, session.review?.commits ?? [])));
   });
 
   routes.delete("/workspaces/:workspaceId/sessions/:sessionId", async (context) => {
