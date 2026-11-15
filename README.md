@@ -144,6 +144,10 @@ Run `tideline sync setup --github-activity` to opt the selected GitHub checkouts
 
 **Reports → Trends** compares two equal, completed UTC periods using synced workspace sessions. Its links open the sessions behind the recorded usage, failures, and frustration counts.
 
+**Reports → Session intelligence** groups failed tools, skills, and child agents, common error reasons, and explicit feedback. Each pattern shows the number of affected sessions and recorded events in both periods. Open an example to jump to its source line. Error reasons use captured output when available, and the report shows how many sessions have incomplete activity.
+
+Open **Trends** on the public site to compare benchmark scores by cost or duration. **Agent runs** shows monthly session and tool-call statistics from a public coding-agent sample. **Dev usage** shows observed tool errors by model, with a choice of how to normalize the counts. Each view links to its dataset and explains its coverage. Public Trends reads published datasets independently of workspace activity.
+
 Open **Reports → Weekly** to compare completed UTC weeks, open notable sessions, download Markdown, or save a private report.
 
 Open **Reports** to see session activity, reported tokens, and estimated cost by repository and model. Choose a time period, agent, or repository, then select **Apply**. **Download CSV** exports counts and usage for the chosen filters. Open a session to see its own breakdown. Token totals include reported input, cache reads and writes, and output. Cost estimates apply standard API token rates in USD. Subscription charges, discounts, and special rates can differ. [OpenAI pricing](https://developers.openai.com/api/docs/pricing) · [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)

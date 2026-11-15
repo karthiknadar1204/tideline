@@ -7,6 +7,7 @@
     "./usage": "./src/usage.ts",
     "./transcripts": "./src/transcripts.ts",
     "./redaction": "./src/redaction.ts",
+    "./session-intelligence": "./src/session-intelligence.ts",
     "./digest": "./src/digest.ts"
   },
   "scripts": {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import styles from "../sessions.module.css";
 
@@ -32,7 +32,24 @@ export function SessionReader({ entries, prompts, context, panels, activityNote 
   const requested = search.get("view");
   const active = views.find(({ id }) => requested === id)?.id ?? "timeline";
   const tabs = useRef<HTMLDivElement>(null);
+  const timeline = useRef<HTMLOListElement>(null);
   const showsConversation = active === "timeline" || active === "conversation";
+
+  useEffect(() => {
+    if (active !== "timeline") return;
+    function openLinkedActivity() {
+      const hash = window.location.hash;
+      if (!/^#(?:tool|skill|child)-[1-9][0-9]*-[0-9]+$/u.test(hash)) return;
+      const entry = document.getElementById(hash.slice(1));
+      if (!entry || entry.parentElement !== timeline.current) return;
+      const details = entry.querySelector("details");
+      if (details) details.open = true;
+    }
+
+    openLinkedActivity();
+    window.addEventListener("hashchange", openLinkedActivity);
+    return () => window.removeEventListener("hashchange", openLinkedActivity);
+  }, [active]);
 
   function viewQuery(view: View) {
     const query = new URLSearchParams(search);
@@ -87,7 +104,7 @@ export function SessionReader({ entries, prompts, context, panels, activityNote 
             {id === active && (id === "timeline" || id === "conversation" ? (
               <>
                 {active === "timeline" && activityNote && <p className={styles.traceNote}>{activityNote}</p>}
-                <ol aria-label={active === "timeline" ? "Session timeline" : "Conversation"} className={styles.timeline}>
+                <ol ref={timeline} aria-label={active === "timeline" ? "Session timeline" : "Conversation"} className={styles.timeline}>
                   {entries.filter(({ kind }) => active === "timeline" || kind === "message").map(({ key, content }) => (
                     <li key={key} id={key}>{content}</li>
                   ))}

@@ -1,24 +1,66 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { benchmarkSource, readBenchmarkBoards } from "../../lib/public-trends";
+import { Suspense } from "react";
+import { publicAgentRuns, publicModelUsage, publicTraceSample, readBenchmarkBoards, traceLabSource } from "../../lib/public-trends";
 import landing from "../landing.module.css";
+import { AgentRuns } from "./agent-runs";
 import { BenchmarkExplorer } from "./benchmark-explorer";
+import { DeveloperUsage } from "./developer-usage";
 import styles from "./trends.module.css";
 
 export const metadata: Metadata = {
   title: "Coding agent trends | Tideline",
-  description: "Compare public SWE-bench results and see how developers report using coding agents.",
+  description: "Compare public benchmark results, recorded agent runs, and developer usage.",
 };
 
-const surveySource = "https://survey.stackoverflow.co/2026/ai";
-const surveyMetrics = [
-  { value: "66%", label: "reported using AI for coding assistance or agents" },
-  { value: "63%", label: "reported using general-purpose AI chatbots" },
-  { value: "31%", label: "of daily AI users reported using it at least four hours a day" },
+const views = [
+  { id: "benchmarks", label: "Benchmarks", href: "/trends" },
+  { id: "agent-runs", label: "Agent runs", href: "/trends?view=agent-runs" },
+  { id: "dev-usage", label: "Dev usage", href: "/trends?view=dev-usage" },
 ];
 
-export default async function TrendsPage() {
-  const boards = await readBenchmarkBoards().catch(() => []);
+const dates = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
+  .formatRange(new Date(publicTraceSample.from), new Date(publicTraceSample.through));
+
+function TraceLabCitation() {
+  return (
+    <p className={styles.source}>
+      Derived from <a href={traceLabSource.release}>{traceLabSource.name} v0.0.2 ↗</a> · {dates} · {publicTraceSample.contributors} contributors.
+      {" "}<a href={traceLabSource.license}>CC BY 4.0</a>
+    </p>
+  );
+}
+
+async function PublicBenchmarks() {
+  const { boards, missingSweBench } = await readBenchmarkBoards();
+  return (
+    <>
+      <BenchmarkExplorer boards={boards} />
+      {missingSweBench && <p className={styles.source}>SWE-bench results are temporarily unavailable.</p>}
+    </>
+  );
+}
+
+function Survey() {
+  return (
+    <section className={styles.survey} aria-labelledby="survey-heading">
+      <div className={styles.sectionHeader}>
+        <div><h3 id="survey-heading">What developers report</h3><p>Responses to the 2026 Stack Overflow Developer Survey.</p></div>
+        <a href="https://survey.stackoverflow.co/2026/ai/data/ai-select">View survey results ↗</a>
+      </div>
+      <dl className={styles.metrics}>
+        <div className={styles.panel}><dt>Used a coding assistant or coding agent at work</dt><dd>65.9%</dd></div>
+        <div className={styles.panel}><dt>Used general-purpose AI chat tools at work</dt><dd>62.5%</dd></div>
+        <div className={styles.panel}><dt>Used AI agents or automated workflows at work</dt><dd>26.2%</dd></div>
+      </dl>
+      <p className={styles.source}>17,464 respondents answered this question and could select more than one option.</p>
+    </section>
+  );
+}
+
+export default async function TrendsPage({ searchParams }: PageProps<"/trends">) {
+  const { view } = await searchParams;
+  const active = views.find(({ id }) => id === view)?.id ?? "benchmarks";
   return (
     <div className={landing.landing}>
       <header className={`${landing.shell} ${landing.header}`}>
@@ -32,27 +74,35 @@ export default async function TrendsPage() {
       <main className={`${landing.shell} ${styles.content}`}>
         <div className={styles.intro}>
           <h1>Coding agent trends</h1>
-          <p>Explore benchmark results and see how developers report using AI in their work.</p>
+          <p>Compare benchmark performance and explore how people use coding agents.</p>
         </div>
         <nav className={styles.sections} aria-label="Trends sections">
-          <a href="#benchmarks">Benchmarks</a><a href="#developer-usage">Developer usage</a>
+          {views.map(({ id, href, label }) => <Link key={id} href={href} aria-current={active === id ? "page" : undefined}>{label}</Link>)}
         </nav>
-        <section id="benchmarks" className={styles.section} aria-labelledby="benchmarks-title">
-          <div className={styles.sectionHeader}>
-            <div><h2 id="benchmarks-title">SWE-bench results</h2><p>See how agents resolve real GitHub issues across benchmark datasets.</p></div>
-            <a href={benchmarkSource}>SWE-bench leaderboard ↗</a>
-          </div>
-          {boards.length ? <BenchmarkExplorer boards={boards} /> : <p className={styles.empty}>Benchmark results are temporarily unavailable.</p>}
-        </section>
-        <section id="developer-usage" className={styles.section} aria-labelledby="usage-title">
-          <div className={styles.sectionHeader}>
-            <div><h2 id="usage-title">Developer usage</h2><p>Responses reported in the 2026 Stack Overflow Developer Survey.</p></div>
-            <a href={surveySource}>Read the survey ↗</a>
-          </div>
-          <dl className={styles.metrics}>
-            {surveyMetrics.map(({ value, label }) => <div className={styles.panel} key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
-          </dl>
-        </section>
+        {active === "benchmarks" && (
+          <section className={styles.section} aria-labelledby="benchmarks-title">
+            <div className={styles.sectionHeader}><div><h2 id="benchmarks-title">Benchmark results</h2>
+              <p>Compare how agents score on the same task set and what each attempt costs.</p></div></div>
+            <Suspense fallback={<p className={styles.empty} role="status">Loading benchmark results…</p>}><PublicBenchmarks /></Suspense>
+          </section>
+        )}
+        {active === "agent-runs" && (
+          <section className={styles.section} aria-labelledby="agent-runs-title">
+            <div className={styles.sectionHeader}><div><h2 id="agent-runs-title">Agent runs</h2>
+              <p>Session counts, elapsed time, and tool calls from a public sample of Claude Code and Codex activity.</p></div></div>
+            <TraceLabCitation />
+            <AgentRuns rows={publicAgentRuns} />
+          </section>
+        )}
+        {active === "dev-usage" && (
+          <section className={styles.section} aria-labelledby="usage-title">
+            <div className={styles.sectionHeader}><div><h2 id="usage-title">Developer usage</h2>
+              <p>Compare observed friction across models in public coding-agent traces.</p></div></div>
+            <TraceLabCitation />
+            <DeveloperUsage models={publicModelUsage} />
+            <Survey />
+          </section>
+        )}
       </main>
     </div>
   );

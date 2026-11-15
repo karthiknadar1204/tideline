@@ -1,10 +1,11 @@
 import { shiftDay, utcDay, workspaceTrendsSessions } from "@tideline/contracts";
 import type { WorkspaceTrendsSession } from "@tideline/contracts";
+import { intelligencePeriods } from "@tideline/contracts/session-intelligence";
 import { buildWorkspaceReport, readReportFilters } from "./reports";
 import { summarizeSession, summarizeWorkspace } from "./usage";
 import { fetchWorkspaceResource } from "./workspace";
 
-export const trendPeriods = [7, 30, 90] as const;
+export const trendPeriods = intelligencePeriods;
 
 export function readTrendFilters(query: Parameters<typeof readReportFilters>[0], now = new Date()) {
   const latest = shiftDay(utcDay(now), -1);

@@ -4,6 +4,7 @@ import type {
   CliSessionListQuery, RepositoryEvidenceQuery, RepositoryInstructionUpload, SessionActivity, SessionCapture, SessionImportRequest, SessionSummary, SyncInventoryUpdate,
   WorkspaceActivityKind, WorkspaceActivityQuery, WorkspaceSessionSearchQuery,
 } from "@tideline/contracts";
+import type { SessionIntelligenceQuery } from "@tideline/contracts/session-intelligence";
 import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -13,6 +14,7 @@ import { lockAccount } from "./account-retirement";
 import { agentSessions, repositoryInstructions, sessionShares, syncGrants, syncInventories, transcriptAttachments, transcriptRecords, workspaceMembers, workspaces } from "./schema";
 import { readRepositoryFiles, readRepositoryInstructions } from "./repository-evidence";
 import { sessionReportedFrustration } from "./session-frustration";
+import { readSessionIntelligence } from "./session-intelligence";
 import { mergeSessionCapture } from "./session-subagents";
 import { advancedSessionSearch, recordedToolFailure, sessionActivityRows, sessionModels } from "./session-search";
 import { mergeRepositorySettings, readRepositorySyncStatus, readSyncCoverage } from "./sync-inventory";
@@ -357,6 +359,10 @@ export function createSessionStore(databaseUrl: string) {
           .where(and(eq(agentSessions.workspaceId, workspaceId), gt(agentSessions.readyMessageCount, 0), gte(day, from), lte(day, to)))
           .orderBy(desc(agentSessions.startedAt), desc(agentSessions.id));
       }, { isolationLevel: "repeatable read", accessMode: "read only" });
+    },
+
+    intelligence(access: { workspaceId: string; userId: string }, filters: SessionIntelligenceQuery) {
+      return readSessionIntelligence(db, access, filters);
     },
 
     async listReadyWithInsights(workspaceId: string, userId: string) {

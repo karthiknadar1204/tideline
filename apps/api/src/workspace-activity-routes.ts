@@ -1,9 +1,20 @@
 import { priceSession, workspaceActivityKind, workspaceActivityQuery, workspaceResponse, workspaceTrendsQuery, workspaceTrendsSessions } from "@tideline/contracts";
+import { sessionIntelligenceQuery, sessionIntelligenceResponse } from "@tideline/contracts/session-intelligence";
 import type { createSessionStore } from "@tideline/db/sessions";
 import type { Hono } from "hono";
 import type { WorkspaceContext } from "./workspace-routes";
 
 export function registerWorkspaceActivityRoutes(routes: Hono<WorkspaceContext>, sessions: ReturnType<typeof createSessionStore>) {
+  routes.get("/workspaces/:id/intelligence", async (context) => {
+    const workspace = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    if (!workspace.success) return context.json({ error: "Workspace not found." }, 404);
+    const filters = sessionIntelligenceQuery.safeParse(context.req.query());
+    if (!filters.success) return context.json({ error: "Choose a valid intelligence period and scope." }, 400);
+    const report = await sessions.intelligence({ workspaceId: workspace.data, userId: context.get("userId") }, filters.data);
+    if (!report) return context.json({ error: "Workspace not found." }, 404);
+    return context.json(sessionIntelligenceResponse.parse(report), 200, { "Cache-Control": "private, no-store" });
+  });
+
   routes.get("/workspaces/:id/trends", async (context) => {
     const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
     if (!id.success) return context.json({ error: "Workspace not found." }, 404);

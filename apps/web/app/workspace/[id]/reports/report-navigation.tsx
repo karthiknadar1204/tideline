@@ -1,10 +1,11 @@
 import Link from "next/link";
 
-export function ReportNavigation({ workspaceId, active }: { workspaceId: string; active: "usage" | "trends" | "weekly" | "saved" | "github" }) {
+export function ReportNavigation({ workspaceId, active }: { workspaceId: string; active: "usage" | "trends" | "intelligence" | "weekly" | "saved" | "github" }) {
   const base = `/workspace/${encodeURIComponent(workspaceId)}/reports`;
   const links = [
     { id: "usage", href: base, label: "Usage reports" },
     { id: "trends", href: `${base}/trends`, label: "Trends" },
+    { id: "intelligence", href: `${base}/intelligence`, label: "Session intelligence" },
     { id: "weekly", href: `${base}/weekly`, label: "Weekly" },
     { id: "saved", href: `${base}/saved`, label: "Saved reports" },
     { id: "github", href: `${base}/github`, label: "GitHub" },

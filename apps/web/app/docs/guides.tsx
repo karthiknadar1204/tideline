@@ -87,6 +87,7 @@ function CliGuide() {
         <p>Run <code>tideline github sync</code> from a GitHub checkout to import recent merged PRs and GitHub Actions runs. Sign in first with <code>gh auth login</code>. Open <strong>Reports → GitHub</strong> to see the imported activity.</p>
         <p>To keep GitHub activity updated automatically, run <code>tideline sync setup --github-activity</code> and select your checkouts. GitHub credentials stay in your local <code>gh</code> installation. Run setup with <code>--no-github-activity</code> to turn it off.</p>
         <p>Open <strong>Reports → Trends</strong> to compare completed UTC date ranges. Use the filters to compare an agent or repository, then open the sessions behind recorded failures or frustration.</p>
+        <p>Open <strong>Reports → Session intelligence</strong> to find recurring failures, common error reasons, and explicit feedback. Each pattern shows affected sessions and recorded events for both periods. Select an example to open its original message or tool call.</p>
       </section>
       <section aria-labelledby="troubleshoot">
         <h2 id="troubleshoot">Troubleshoot sync</h2>

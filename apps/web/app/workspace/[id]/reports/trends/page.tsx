@@ -1,5 +1,6 @@
 import { sessionSourceLabel } from "@tideline/contracts";
 import Link from "next/link";
+import { reportFilterParams } from "../../../../../lib/reports";
 import { sessionDetailHref, sessionListHref } from "../../../../../lib/session-filters";
 import { formatCost, formatCount } from "../../../../../lib/usage";
 import type { Usage, UsageRow } from "../../../../../lib/usage";
@@ -144,7 +145,12 @@ export default async function WorkspaceTrendsPage({ params, searchParams }: Page
       </section>
 
       <section className={panel} aria-labelledby="session-intelligence">
-        <h2 className="font-semibold" id="session-intelligence">Session intelligence</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="font-semibold" id="session-intelligence">Session highlights</h2>
+          <Link className={`text-sm ${textLink}`} href={`/workspace/${encodeURIComponent(id)}/reports/intelligence?${reportFilterParams(filters)}`}>
+            Explore session intelligence
+          </Link>
+        </div>
         {maxCoverage > 0 && <p className={`mt-2 text-sm ${muted}`}>Tool activity was incomplete or unavailable for {formatCount(observed.incomplete)} current sessions and {formatCount(earlier.incomplete)} prior sessions.</p>}
         {!observed.sessions && <p className={`mt-2 text-sm ${muted}`}>No sessions in the current period.</p>}
         {(longest || largestEstimate) && (
