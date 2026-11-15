@@ -1,4 +1,7 @@
-import { CopyTerminalCommand } from "./copy-terminal-command";
+import Link from "next/link";
+import { checkoutCli } from "../../../lib/cli-command";
+import { teamLink } from "../../../lib/team-ui";
+import { CopyTerminalCommand } from "../../copy-terminal-command";
 
 export function SyncSetup({ workspaceId }: { workspaceId: string }) {
   return (
@@ -7,7 +10,7 @@ export function SyncSetup({ workspaceId }: { workspaceId: string }) {
       <p className="text-sm leading-relaxed text-[var(--workspace-muted)]">
         Run this in the Tideline checkout. Choose repositories, decide whether to include older sessions, and approve in your browser.
       </p>
-      <CopyTerminalCommand command={`onboard --workspace ${workspaceId}`} label="Copy command" />
+      <CopyTerminalCommand command={`${checkoutCli} onboard --workspace ${workspaceId}`} />
       <details className="border-t border-[var(--workspace-border)] pt-3 text-sm">
         <summary className="cursor-pointer font-medium text-[var(--workspace-muted)] hover:text-[var(--workspace-accent)]">Setup and sync options</summary>
         <p className="mt-2 leading-relaxed text-[var(--workspace-muted)]">
@@ -17,6 +20,7 @@ export function SyncSetup({ workspaceId }: { workspaceId: string }) {
           Choose background sync to keep it running after closing the terminal. Use <code className="text-xs">sync status</code> to check progress and <code className="text-xs">sync setup</code> to change your selection.
         </p>
       </details>
+      <Link className={teamLink} href="/docs/cli">CLI commands and sync</Link>
     </section>
   );
 }

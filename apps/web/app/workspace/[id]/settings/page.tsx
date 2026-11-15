@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { teamLink } from "../../../../lib/team-ui";
 import { listWorkspaceSessions, readWorkspaceAccess, readWorkspaceUsageTargets } from "../../../../lib/workspace";
 import { RefreshSessions } from "../refresh-sessions";
 import { SyncSetup } from "../sync-setup";
@@ -28,6 +30,7 @@ export default async function WorkspaceSettingsPage({ params }: PageProps<"/work
             <p className="text-sm leading-relaxed text-[var(--workspace-muted)]">
               {workspace.kind === "team" ? "Team members can read the sessions synced here." : "Your account controls access to this workspace."} Run <code className="text-xs">sync setup</code> to change which repositories upload. Sessions already uploaded stay in the workspace.
             </p>
+            <Link className={teamLink} href="/docs/data-and-privacy">What Tideline uploads</Link>
           </section>
         </div>
         <SyncSetup workspaceId={id} />

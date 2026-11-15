@@ -20,7 +20,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
       <div className="mx-auto w-full max-w-5xl px-4 sm:px-8">
         <header className="flex min-h-16 items-center justify-between gap-4 border-b border-[var(--workspace-border)]">
           <Link href="/" className="font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4">Tideline</Link>
-          <Link href="/#get-started" className="text-sm font-medium text-[var(--workspace-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-4">Setup guide</Link>
+          <Link href="/docs/get-started" className="text-sm font-medium text-[var(--workspace-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-4">Setup guide</Link>
         </header>
         <main className="grid min-h-[75dvh] place-items-center py-8 sm:py-12">
           {children}

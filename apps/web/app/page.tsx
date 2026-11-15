@@ -10,7 +10,6 @@ export const metadata: Metadata = {
   description: "Review coding agent conversations, tool calls, and estimated costs in one workspace. Choose which repositories sync from your computer.",
 };
 
-const setupGuide = "https://github.com/karthiknadar1204/tideline#run-locally";
 const sampleSession = {
   repository: "signal-web",
   agent: sessionSourceLabel.codex,
@@ -60,7 +59,7 @@ export default function Home() {
       <header className={`${styles.shell} ${styles.header}`}>
         <Link href="/" className={styles.brand}><span className={styles.brandMark} aria-hidden="true" />Tideline</Link>
         <nav aria-label="Main navigation" className={styles.nav}>
-          <a href="#get-started" className={styles.navLink}>Setup</a>
+          <Link href="/docs" className={styles.navLink}>Docs</Link>
           <Suspense>
             <Show when="signed-out"><Link className={styles.navButton} href="/sign-in">Sign in</Link></Show>
             <Show when="signed-in"><Link className={styles.navButton} href="/workspaces">Open workspace</Link></Show>
@@ -87,7 +86,7 @@ export default function Home() {
             <li>
               <h3>1. Prepare the CLI</h3>
               <p>Follow the local setup guide to start Tideline and build the CLI. You&apos;ll need Bun, Node.js, and access to the checkout.</p>
-              <a className={styles.textLink} href={setupGuide}>Local setup guide <span aria-hidden="true">↗</span></a>
+              <Link className={styles.textLink} href="/docs/get-started">Read the setup guide <span aria-hidden="true">→</span></Link>
             </li>
             <li>
               <h3>2. Open your workspace</h3>
@@ -107,7 +106,10 @@ export default function Home() {
 
       <footer className={`${styles.shell} ${styles.footer}`}>
         <span>Tideline</span>
-        <a className={styles.textLink} href="https://github.com/karthiknadar1204/tideline">GitHub <span aria-hidden="true">↗</span></a>
+        <div className={styles.nav}>
+          <Link className={styles.textLink} href="/docs">Documentation</Link>
+          <Link className={styles.textLink} href="/docs/data-and-privacy">Data and privacy</Link>
+        </div>
       </footer>
     </div>
   );

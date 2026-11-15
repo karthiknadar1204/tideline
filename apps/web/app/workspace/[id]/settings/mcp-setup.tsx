@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
-import { teamPanel, teamSecondaryButton } from "../../../../lib/team-ui";
+import { teamLink, teamPanel, teamSecondaryButton } from "../../../../lib/team-ui";
 
 export function McpSetup({ workspaceId }: { workspaceId: string }) {
   const command = `codex mcp add tideline -- node --env-file="$PWD/apps/cli/.env.local" "$PWD/apps/cli/dist/index.js" mcp --workspace ${workspaceId}`;
@@ -37,6 +38,7 @@ export function McpSetup({ workspaceId }: { workspaceId: string }) {
           For another MCP client, use stdio with the <code className="text-xs">node</code> command shown above. Replace <code className="text-xs">$PWD</code> with the absolute path to the Tideline checkout.
         </p>
       </details>
+      <Link className={teamLink} href="/docs/mcp">MCP setup guide</Link>
     </section>
   );
 }

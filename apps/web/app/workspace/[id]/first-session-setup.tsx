@@ -1,7 +1,8 @@
 import type { WorkspaceAccess } from "@tideline/contracts";
 import Link from "next/link";
+import { checkoutCli } from "../../../lib/cli-command";
 import { teamLink, teamPanel } from "../../../lib/team-ui";
-import { CopyTerminalCommand } from "./copy-terminal-command";
+import { CopyTerminalCommand } from "../../copy-terminal-command";
 import { RefreshSessions } from "./refresh-sessions";
 
 export function FirstSessionSetup({ workspace }: { workspace: WorkspaceAccess }) {
@@ -16,8 +17,8 @@ export function FirstSessionSetup({ workspace }: { workspace: WorkspaceAccess })
           </p>
         </div>
         <div className="space-y-2">
-          <p className="text-sm leading-relaxed">Run this from the Tideline checkout. If you just cloned it, <Link href="/#get-started" className={teamLink}>build and configure the CLI first</Link>.</p>
-          <CopyTerminalCommand command={`onboard --workspace ${id}`} label="Copy setup command" />
+          <p className="text-sm leading-relaxed">Run this from the Tideline checkout. See the <Link href="/docs/get-started" className={teamLink}>setup guide</Link> for prerequisites.</p>
+          <CopyTerminalCommand command={`${checkoutCli} onboard --workspace ${id}`} label="Copy setup command" />
         </div>
         <div className="space-y-3 border-t border-[var(--workspace-border)] pt-4 text-sm leading-relaxed">
           <div>
@@ -40,7 +41,7 @@ export function FirstSessionSetup({ workspace }: { workspace: WorkspaceAccess })
         <details className="rounded-xl border border-[var(--workspace-border)] p-4 text-sm">
           <summary className="cursor-pointer font-medium text-[var(--workspace-accent)] focus-visible:outline-2 focus-visible:outline-offset-2">Try a sample session</summary>
           <p className="my-3 leading-relaxed text-[var(--workspace-muted)]">This command uploads a synthetic Codex conversation from the Tideline checkout. Approve the upload in your browser.</p>
-          <CopyTerminalCommand command={`import packages/test-fixtures/codex/sanitized-session.jsonl --workspace ${id} --sanitized`} label="Copy sample command" />
+          <CopyTerminalCommand command={`${checkoutCli} import packages/test-fixtures/codex/sanitized-session.jsonl --workspace ${id} --sanitized`} label="Copy sample command" />
         </details>
       </div>
     </section>
