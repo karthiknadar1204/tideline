@@ -19,9 +19,13 @@ bun run dev
 
 Open [Tideline](http://localhost:3000) and sign in to open your personal workspace. Use **Open workspace** on the landing page to see all your workspaces. The Hono API listens at [127.0.0.1:3001/health](http://127.0.0.1:3001/health). Change `TIDELINE_WEB_ORIGIN` in the API config if you use a different origin for the web app.
 
+Set `TIDELINE_WEB_ORIGIN` in the web app to that same origin. The web build bundles the CLI and serves it with `/install.sh`. If the CLI needs a different API URL from the web server, set `TIDELINE_PUBLIC_API_URL` in the web app.
+
 ## Sync your first session
 
-Build the CLI, then copy the command under **Sync your first session** in your workspace. To start in the terminal with your personal or selected workspace, run these from the checkout.
+Copy the install command from the landing page or your workspace. It installs the CLI under `~/.local` and opens repository selection. Add `~/.local/bin` to your `PATH` to run `tideline` directly. To use a different location, set `TIDELINE_INSTALL_PREFIX` to an absolute path in the installer’s shell environment.
+
+To run the development copy from the checkout, build it first.
 
 ```sh
 bun run --filter @tideline/cli build

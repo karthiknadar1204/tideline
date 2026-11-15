@@ -6,6 +6,13 @@ export const healthResponse = z.object({
 
 export type HealthResponse = z.infer<typeof healthResponse>;
 
+export const cliInstallConfig = z.strictObject({
+  clerkIssuer: z.url({ protocol: /^https$/ }),
+  oauthClientId: z.string().min(1),
+});
+
+export const workspaceCliStatus = z.strictObject({ approved: z.boolean() });
+
 export const workspaceResponse = z.object({
   id: z.uuid(),
   name: z.string().min(1),

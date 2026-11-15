@@ -4,7 +4,7 @@ import Form from "next/form";
 import Link from "next/link";
 import { parseSessionFilters, sessionFilterParams, sessionHasFilters, sessionListHref } from "../../../lib/session-filters";
 import { formatCount } from "../../../lib/usage";
-import { readWorkspaceAccess, searchWorkspaceSessions } from "../../../lib/workspace";
+import { hasWorkspaceCliApproval, readWorkspaceAccess, searchWorkspaceSessions } from "../../../lib/workspace";
 import { FirstSessionSetup } from "./first-session-setup";
 import { RefreshSessions } from "./refresh-sessions";
 
@@ -154,11 +154,9 @@ export default async function WorkspacePage({ params, searchParams }: PageProps<
 
   return (
     <main className="space-y-6 pt-7 sm:pt-9">
-      <header>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Sessions</h1>
-      </header>
-      {firstSession ? <FirstSessionSetup workspace={firstSession} /> : (
+      {firstSession ? <FirstSessionSetup workspace={firstSession} approved={await hasWorkspaceCliApproval(id)} /> : (
         <>
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Sessions</h1>
           {refresh && <RefreshSessions />}
           <Filters key={`${sessionFilterParams(filters)}:${invalid}`} workspaceId={id} filters={filters} data={data} invalid={invalid} />
           <SessionList id={id} filters={filters} data={data} />

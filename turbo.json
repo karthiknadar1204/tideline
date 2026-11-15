@@ -7,6 +7,7 @@
       "passThroughEnv": [
         "TIDELINE_API_PORT",
         "TIDELINE_API_URL",
+        "TIDELINE_PUBLIC_API_URL",
         "CLERK_SECRET_KEY",
         "CLERK_PUBLISHABLE_KEY",
         "NEXT_PUBLIC_CLERK_*",
@@ -26,7 +27,8 @@
         "!.next/dev/**"
       ],
       "env": [
-        "NEXT_PUBLIC_CLERK_*"
+        "NEXT_PUBLIC_CLERK_*",
+        "TIDELINE_WEB_ORIGIN"
       ],
       "inputs": [
         "$TURBO_DEFAULT$",

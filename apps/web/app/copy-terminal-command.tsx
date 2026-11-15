@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { teamSecondaryButton } from "../lib/team-ui";
 
 export function CopyTerminalCommand({ command, label = "Copy command" }: { command: string; label?: string }) {
   const [status, setStatus] = useState("");
@@ -16,14 +15,17 @@ export function CopyTerminalCommand({ command, label = "Copy command" }: { comma
   }
 
   return (
-    <div className="space-y-3">
-      <code className="block whitespace-pre-wrap rounded-lg bg-[var(--workspace-subtle)] px-3 py-3 text-xs leading-relaxed [overflow-wrap:anywhere] sm:px-4">
-        {command}
-      </code>
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={copyCommand} className={teamSecondaryButton}>{label}</button>
-        <span role="status" className="text-xs text-[var(--workspace-muted)]">{status}</span>
+    <div className="space-y-2">
+      <div className="grid items-center gap-3 rounded-xl border border-[#384b43] bg-[#182721] px-4 py-3 text-[#e7efeb] sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="flex min-w-0 gap-3">
+          <span aria-hidden="true" className="font-mono text-sm text-[#a3d4c1]">$</span>
+          <code className="min-w-0 whitespace-pre-wrap text-xs leading-relaxed [overflow-wrap:anywhere]" style={{ color: "inherit" }}>{command}</code>
+        </div>
+        <button type="button" aria-label={label} onClick={copyCommand} className="min-h-9 w-fit rounded-md border border-[#586b62] px-3 text-xs font-medium hover:bg-[#30473c] focus-visible:outline-2 focus-visible:outline-offset-2">
+          {status === "Copied" ? "Copied" : "Copy"}
+        </button>
       </div>
+      <span role="status" className={status === "Select the command to copy it." ? "block text-xs text-current" : "sr-only"}>{status}</span>
     </div>
   );
 }

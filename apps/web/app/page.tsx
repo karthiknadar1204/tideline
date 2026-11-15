@@ -3,6 +3,8 @@ import { sessionSourceLabel } from "@tideline/contracts";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import { cliInstallCommand } from "../lib/cli-install";
+import { CopyTerminalCommand } from "./copy-terminal-command";
 import styles from "./landing.module.css";
 
 export const metadata: Metadata = {
@@ -72,7 +74,10 @@ export default function Home() {
           <div className={styles.heroText}>
             <h1 className={styles.heroTitle} id="landing-title">See what your <em>coding agents</em> did.</h1>
             <p className={styles.lead}>Read conversations, inspect tool calls, and track estimated costs across Codex, Claude Code, Cursor, and OpenCode.</p>
-            <a className={styles.primaryButton} href="#get-started">Get started <span aria-hidden="true">↘</span></a>
+            <div className={styles.heroSetup}>
+              <CopyTerminalCommand command={cliInstallCommand()} label="Copy install command" />
+              <Link className={styles.textLink} href="/docs/get-started">Setup guide <span aria-hidden="true">→</span></Link>
+            </div>
           </div>
           <SessionPreview />
         </section>
@@ -80,25 +85,24 @@ export default function Home() {
         <section id="get-started" aria-labelledby="setup-title" className={styles.setup}>
           <div className={styles.setupIntro}>
             <h2 id="setup-title">Get your first session into Tideline.</h2>
-            <p>Set up from the Tideline checkout on macOS or Linux.</p>
+            <p>Use the CLI on macOS or Linux with Node.js 22.13+ or 24.</p>
           </div>
           <ol className={styles.steps}>
             <li>
-              <h3>1. Prepare the CLI</h3>
-              <p>Follow the local setup guide to start Tideline and build the CLI. You&apos;ll need Bun, Node.js, and access to the checkout.</p>
-              <Link className={styles.textLink} href="/docs/get-started">Read the setup guide <span aria-hidden="true">→</span></Link>
+              <h3>1. Run the command</h3>
+              <p>Copy the command above and paste it into your terminal. Tideline installs and opens the repository picker.</p>
             </li>
             <li>
-              <h3>2. Open your workspace</h3>
-              <p>Sign in and copy the CLI setup command from the Sessions page in your new workspace.</p>
+              <h3>2. Choose what to sync</h3>
+              <p>Pick repositories with saved coding sessions. Review your choices and decide whether to bring in older conversations.</p>
+            </li>
+            <li>
+              <h3>3. Open your workspace</h3>
+              <p>Approve in your browser. The terminal gives you a link to your sessions.</p>
               <Suspense>
                 <Show when="signed-out"><Link className={styles.textLink} href="/sign-up">Create an account <span aria-hidden="true">↗</span></Link></Show>
                 <Show when="signed-in"><Link className={styles.textLink} href="/workspace">Set up your workspace <span aria-hidden="true">↗</span></Link></Show>
               </Suspense>
-            </li>
-            <li>
-              <h3>3. Choose what to sync</h3>
-              <p>Run the command, review the repositories you selected, and approve in your browser. Open the workspace link from the CLI to see your sessions.</p>
             </li>
           </ol>
         </section>

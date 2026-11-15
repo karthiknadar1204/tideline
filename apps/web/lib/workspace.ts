@@ -3,6 +3,7 @@ import {
   sessionDetailResponse,
   sessionSummariesResponse,
   workspaceAccess,
+  workspaceCliStatus,
   workspaceResponse,
   workspaceSessionSearchResponse,
   workspaceUsageTargets,
@@ -56,6 +57,12 @@ export async function requestWorkspace(path: string, method: "GET" | "POST") {
 export const readWorkspaceAccess = cache(async (workspaceId: string) => {
   return workspaceAccess.parse(await requestWorkspaceResource(encodeURIComponent(workspaceId)));
 });
+
+export async function hasWorkspaceCliApproval(workspaceId: string) {
+  const response = await fetchWorkspaceResource(`${encodeURIComponent(workspaceId)}/cli-status`, { allowNotFound: true });
+  const status = workspaceCliStatus.safeParse(response?.ok ? await response.json().catch(() => undefined) : undefined);
+  return status.success && status.data.approved;
+}
 
 export async function listWorkspaceSessions(workspaceId: string) {
   return sessionSummariesResponse.parse(

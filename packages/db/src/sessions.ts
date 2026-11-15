@@ -200,6 +200,19 @@ export function createSessionStore(databaseUrl: string) {
       return grant;
     },
 
+    async hasActiveSyncGrant(workspaceId: string, userId: string) {
+      const [grant] = await db.select({ workspaceId: syncGrants.workspaceId })
+        .from(syncGrants)
+        .where(and(
+          eq(syncGrants.workspaceId, workspaceId),
+          eq(syncGrants.userId, userId),
+          isNull(syncGrants.revokedAt),
+          gt(syncGrants.expiresAt, sql`clock_timestamp()`),
+        ))
+        .limit(1);
+      return Boolean(grant);
+    },
+
     async receiveSync(tokenHash: string, request: SessionImportRequest) {
       return db.transaction(async (transaction) => {
         const [grant] = await transaction.select({ workspaceId: syncGrants.workspaceId, userId: syncGrants.userId, kind: workspaces.kind })

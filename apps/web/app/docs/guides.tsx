@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { checkoutCli } from "../../lib/cli-command";
+import { cliInstallCommand } from "../../lib/cli-install";
 import { CopyTerminalCommand } from "../copy-terminal-command";
 import styles from "./docs.module.css";
 
@@ -7,28 +7,22 @@ function GetStarted() {
   return (
     <>
       <section aria-labelledby="prepare-cli">
-        <h2 id="prepare-cli">Prepare the CLI</h2>
-        <p>The current CLI setup uses a Tideline checkout and access to a running Tideline instance. Automatic sync runs on macOS or Linux. You need Bun and Node.js 22.13 or later within Node 22, or Node 24.</p>
-        <p>Copy <code>apps/cli/.env.example</code> to <code>apps/cli/.env.local</code> if you do not have one. Ask your Tideline administrator for the API and dashboard URLs, the Clerk issuer, and the public OAuth client ID.</p>
-        <p>From the checkout root, install the dependencies and build the CLI.</p>
-        <CopyTerminalCommand command={"bun install\nbun run --filter @tideline/cli build"} label="Copy build commands" />
+        <h2 id="prepare-cli">Install the CLI</h2>
+        <p>Use macOS or Linux with Node.js 22.13 or later within Node 22, or Node 24. Run this command in your terminal to install Tideline and open the repository picker.</p>
+        <CopyTerminalCommand command={cliInstallCommand()} label="Copy install command" />
+        <p>To connect to a specific workspace, copy its setup command from <strong>Sessions</strong> or <strong>Settings</strong> → <strong>Sync from your computer</strong>.</p>
       </section>
       <section aria-labelledby="first-session">
         <h2 id="first-session">Sync your first session</h2>
         <ol>
-          <li><Link href="/workspaces">Open your workspace</Link>. In <strong>Sessions</strong>, select <strong>Copy setup command</strong>. If the workspace already has sessions, find the command under <strong>Settings</strong> → <strong>Sync from your computer</strong>.</li>
-          <li>Run the command from the checkout root. Type to filter the repository picker. Use the arrow keys to move, <kbd>Tab</kbd> to select, and <kbd>Enter</kbd> to continue.</li>
+          <li>Type to filter the repository picker. Use the arrow keys to move, <kbd>Tab</kbd> to select, and <kbd>Enter</kbd> to continue.</li>
           <li>Choose whether to import older conversations and keep sync running after you close the terminal. Older sessions are off by default. Review the repositories and confirm.</li>
           <li>Approve the connection in the browser with the account you use for that workspace. Open the dashboard link printed by the CLI.</li>
           <li>If you skipped older sessions, start a new agent session in a selected repository. The dashboard lists the session after processing.</li>
         </ol>
-        <p>If you skipped background sync, keep the same terminal command prefix and replace <code>onboard --workspace …</code> with <code>sync run</code>.</p>
+        <p>If you skipped background sync, run <code>tideline sync run</code> to keep syncing in your current terminal.</p>
       </section>
-      <section aria-labelledby="sample">
-        <h2 id="sample">Try a sample conversation</h2>
-        <p>In an empty workspace, open <strong>Try a sample session</strong> and copy the command. Run it from the checkout root and approve the upload in your browser. Look for <strong>Add a test for empty input</strong> in Sessions. The sample is a synthetic Codex conversation.</p>
-        <p>If your session is missing, see <Link href="/docs/cli#troubleshoot">Troubleshoot sync</Link>.</p>
-      </section>
+      <p className="mt-5">If your session is missing, see <Link href="/docs/cli#troubleshoot">Troubleshoot sync</Link>.</p>
     </>
   );
 }
@@ -38,8 +32,9 @@ function CliGuide() {
     <>
       <section aria-labelledby="run-command">
         <h2 id="run-command">Run a command</h2>
-        <p>Run this from your configured Tideline checkout. Replace <code>--help</code> with a command, or add <code>--help</code> after a command to see its flags.</p>
-        <CopyTerminalCommand command={`${checkoutCli} --help`} label="Copy CLI help command" />
+        <p><Link href="/docs/get-started#prepare-cli">Install Tideline</Link>, then run <code>tideline</code> followed by a command. Add <code>--help</code> to see the command’s flags.</p>
+        <CopyTerminalCommand command="tideline --help" label="Copy CLI help command" />
+        <p>If your terminal cannot find <code>tideline</code>, run it as <code>~/.local/bin/tideline</code> or add <code>~/.local/bin</code> to your <code>PATH</code>.</p>
       </section>
       <section aria-labelledby="account">
         <h2 id="account">Account and workspace</h2>
@@ -128,16 +123,16 @@ function McpGuide() {
       <section aria-labelledby="connect">
         <h2 id="connect">Connect Codex</h2>
         <ol>
-          <li>Build the CLI as described in <Link href="/docs/get-started#prepare-cli">Prepare the CLI</Link>. Run the login command and approve it in your browser.</li>
+          <li><Link href="/docs/get-started#prepare-cli">Install the CLI</Link>. Run the login command and approve it in your browser.</li>
           <li>Open <strong>Settings</strong> in the workspace your agent should use. Select <strong>Copy Codex setup</strong> under <strong>Connect an agent with MCP</strong>.</li>
-          <li>Run the copied command from the checkout, then start a new Codex session.</li>
+          <li>Run the copied command in your terminal, then start a new Codex session.</li>
         </ol>
-        <CopyTerminalCommand command={`${checkoutCli} login`} label="Copy sign-in command" />
+        <CopyTerminalCommand command="tideline login" label="Copy sign-in command" />
       </section>
       <section aria-labelledby="other-clients">
         <h2 id="other-clients">Connect another MCP client</h2>
-        <p>Configure the client to run <code>node</code> over stdio with the following arguments. Replace both paths with absolute paths and use the workspace ID from its URL.</p>
-        <div className={styles.snippet}><code>{"node --env-file=/path/to/tideline/apps/cli/.env.local /path/to/tideline/apps/cli/dist/index.js mcp --workspace WORKSPACE_ID"}</code></div>
+        <p>Configure the client to run Tideline over stdio. Use the absolute path to the installed CLI and the workspace ID from its URL.</p>
+        <div className={styles.snippet}><code>{"$HOME/.local/bin/tideline mcp --workspace WORKSPACE_ID"}</code></div>
         <p>Each MCP connection uses the CLI login and the workspace in its command. Run <code>logout</code> to revoke that CLI login.</p>
       </section>
       <section aria-labelledby="tools">
@@ -203,8 +198,8 @@ function CommandTable({ rows, heading = "Command" }: { rows: [string, string][];
 
 export const docsGuides = [
   {
-    slug: "get-started", title: "Get started", description: "Build the CLI, choose a repository, and sync your first conversation.",
-    sections: [["prepare-cli", "Prepare the CLI"], ["first-session", "Sync your first session"], ["sample", "Try a sample conversation"]],
+    slug: "get-started", title: "Get started", description: "Install the CLI, choose a repository, and sync your first conversation.",
+    sections: [["prepare-cli", "Install the CLI"], ["first-session", "Sync your first session"]],
     Content: GetStarted,
   },
   {

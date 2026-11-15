@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --hostname localhost",
-    "build": "next build",
+    "build:cli": "bun build ../cli/src/index.ts --target=node --minify --outfile=public/cli/tideline.mjs",
+    "dev": "bun run build:cli && next dev --hostname localhost",
+    "build": "bun run build:cli && next build",
     "start": "next start",
     "check-types": "next typegen && tsc --noEmit"
   },

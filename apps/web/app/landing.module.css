@@ -27,8 +27,6 @@
   --line: #d7dccd;
   --panel: #f8faf3;
   --panel-subtle: #ecf2e8;
-  --button: #254735;
-  --button-ink: #f9faf2;
   --display-font: "Tideline Instrument Serif", Georgia, serif;
   min-height: 100dvh;
   background: var(--paper);
@@ -45,8 +43,6 @@
     --line: #415246;
     --panel: #26372d;
     --panel-subtle: #32463a;
-    --button: #c6dfca;
-    --button-ink: #203126;
   }
 }
 
@@ -107,8 +103,7 @@
   text-underline-offset: 0.25em;
 }
 
-.navButton,
-.primaryButton {
+.navButton {
   display: inline-flex;
   min-height: 2.7rem;
   align-items: center;
@@ -120,21 +115,6 @@
 
 .navButton:hover {
   background: var(--panel-subtle);
-}
-
-.primaryButton {
-  min-height: 3rem;
-  gap: 1.1rem;
-  border-color: transparent;
-  padding-inline: 1.15rem;
-  background: var(--button);
-  color: var(--button-ink);
-  font-size: 0.925rem;
-  font-weight: 600;
-}
-
-.primaryButton:hover {
-  background: color-mix(in oklab, var(--button) 88%, var(--button-ink));
 }
 
 .hero {
@@ -165,6 +145,10 @@
   color: var(--muted);
   font-size: clamp(1rem, 1.4vw, 1.17rem);
   line-height: 1.65;
+}
+
+.heroSetup {
+  max-width: 28rem;
 }
 
 .preview {

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createClerkClient } from "@clerk/backend";
 import { parsePublishableKey } from "@clerk/shared/keys";
 import {
+  cliInstallConfig,
   cliLoginResponse,
   cliSessionListQuery,
   MAX_CODEX_IMPORT_BYTES,
@@ -9,6 +10,7 @@ import {
   syncEnrollmentRequest,
   syncEnrollmentResponse,
   workspaceNameUpdate,
+  workspaceCliStatus,
   workspaceResponse,
   workspaceSessionSearchQuery,
   workspaceUsageTargetUpdate,
@@ -91,6 +93,11 @@ export function createWorkspaceRoutes() {
   const { clerk, sessionVerification, workspaces, sessions, shares, savedReports } = services;
   const oauthClientId = process.env.TIDELINE_CLERK_OAUTH_CLIENT_ID;
 
+  routes.get("/cli/install-config", (context) => {
+    const config = cliInstallConfig.safeParse({ clerkIssuer: sessionVerification.issuer, oauthClientId });
+    return config.success ? context.json(config.data) : context.json({ error: "CLI approval is not configured." }, 503);
+  });
+
   routes.use("/workspaces/*", async (context, next) => {
     if (!/^Bearer \S+$/.test(context.req.header("Authorization") ?? "")) {
       return context.json({ error: "Sign in to access your workspace." }, 401);
@@ -131,6 +138,15 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "Workspace not found." }, 404);
     }
     return context.json(workspace);
+  });
+
+  routes.get("/workspaces/:id/cli-status", async (context) => {
+    const id = workspaceResponse.shape.id.safeParse(context.req.param("id"));
+    const userId = context.get("userId");
+    const workspace = id.success && await workspaces.findAccessible({ workspaceId: id.data, userId });
+    if (!workspace) return context.json({ error: "Workspace not found." }, 404);
+    const approved = await sessions.hasActiveSyncGrant(workspace.id, userId);
+    return context.json(workspaceCliStatus.parse({ approved }));
   });
 
   routes.patch("/workspaces/:id", bodyLimit({
