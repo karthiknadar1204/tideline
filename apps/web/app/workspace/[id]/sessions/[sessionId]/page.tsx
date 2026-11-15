@@ -10,6 +10,7 @@ import { SessionReview } from "../../session-review";
 import { SessionUsage } from "../../usage-summary";
 import { SessionRefresh } from "../session-refresh";
 import styles from "../sessions.module.css";
+import { SessionFiles, SessionSetup } from "./capture";
 import { SessionReader } from "./reader";
 import { SessionShare } from "./session-share";
 import { buildSessionTimeline } from "./timeline";
@@ -144,10 +145,14 @@ export default async function SessionPage({ params, searchParams }: PageProps<"/
       </header>
       <SessionReader
         key={session.id}
-        {...buildSessionTimeline(session, agent)}
+        {...buildSessionTimeline(session, agent, session.capture)}
         context={context}
-        usage={<SessionUsage analytics={session.analytics} />}
-        review={<SessionReview review={session.review} />}
+        panels={{
+          files: <SessionFiles capture={session.capture} source={session.source} />,
+          setup: <SessionSetup capture={session.capture} session={session} />,
+          usage: <SessionUsage analytics={session.analytics} />,
+          review: <SessionReview review={session.review} />,
+        }}
       />
     </main>
   );

@@ -6,12 +6,14 @@ import {
   cliLoginResponse,
   cliSessionListQuery,
   MAX_CODEX_IMPORT_BYTES,
+  MAX_SESSION_CAPTURE_BYTES,
   sessionImportRequest,
   syncEnrollmentRequest,
   syncEnrollmentResponse,
   workspaceNameUpdate,
   workspaceCliStatus,
   workspaceResponse,
+  workspaceSessionDetailResponse,
   workspaceSessionSearchQuery,
   workspaceUsageTargetUpdate,
 } from "@tideline/contracts";
@@ -34,10 +36,30 @@ import { registerWorkspaceActivityRoutes } from "./workspace-activity-routes";
 
 export type WorkspaceContext = { Variables: { userId: string; cliAccount: CliAccount } };
 const grantLifetimeMs = 30 * 24 * 60 * 60 * 1_000;
+const importTooLarge = "Session import exceeds the size limit.";
 const importBodyLimit = bodyLimit({
-  maxSize: MAX_CODEX_IMPORT_BYTES,
-  onError: (context) => context.json({ error: "Session import exceeds the size limit." }, 413),
+  maxSize: MAX_CODEX_IMPORT_BYTES + MAX_SESSION_CAPTURE_BYTES + ',"capture":'.length,
+  onError: (context) => context.json({ error: importTooLarge }, 413),
 });
+
+async function readSessionUpload(context: Context<WorkspaceContext>) {
+  const text = await context.req.text().catch(() => "");
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { kind: "invalid" } as const;
+  }
+
+  const request = sessionImportRequest.safeParse(body);
+  if (!request.success) return { kind: "invalid" } as const;
+
+  const { session: { capture, ...session }, ...envelope } = request.data;
+  const baseSize = Buffer.byteLength(capture ? JSON.stringify({ ...envelope, session }) : text);
+  if (baseSize > MAX_CODEX_IMPORT_BYTES) return { kind: "too-large" } as const;
+
+  return { kind: "valid", data: request.data } as const;
+}
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -233,11 +255,12 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "Session not found." }, 404);
     }
 
-    const session = await sessions.findReady(workspaceId.data, sessionId.data);
+    const session = await sessions.findReady(workspaceId.data, sessionId.data, { includeCapture: true });
     if (!session) {
       return context.json({ error: "Session not found." }, 404);
     }
-    return context.json(priceSession(session));
+    context.header("Cache-Control", "private, no-store");
+    return context.json(workspaceSessionDetailResponse.parse({ ...priceSession(session), capture: session.capture ?? null }));
   });
 
   const requireClerkCli = createMiddleware<WorkspaceContext>(async (context, next) => {
@@ -346,9 +369,9 @@ export function createWorkspaceRoutes() {
     requireClerkCli,
     importBodyLimit,
     async (context) => {
-      const body: unknown = await context.req.json().catch(() => null);
-      const request = sessionImportRequest.safeParse(body);
-      if (!request.success) {
+      const request = await readSessionUpload(context);
+      if (request.kind === "too-large") return context.json({ error: importTooLarge }, 413);
+      if (request.kind === "invalid") {
         return context.json({ error: "Expected a valid, sanitized session import." }, 400);
       }
 
@@ -402,9 +425,9 @@ export function createWorkspaceRoutes() {
       return context.json({ error: "A sync credential is required." }, 401);
     }
 
-    const body: unknown = await context.req.json().catch(() => null);
-    const request = sessionImportRequest.safeParse(body);
-    if (!request.success) {
+    const request = await readSessionUpload(context);
+    if (request.kind === "too-large") return context.json({ error: importTooLarge }, 413);
+    if (request.kind === "invalid") {
       return context.json({ error: "Expected a valid, sanitized session snapshot." }, 400);
     }
 

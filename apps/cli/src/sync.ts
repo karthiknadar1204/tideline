@@ -39,6 +39,7 @@ type SetupOptions = {
   history?: boolean;
   background?: boolean;
   conversations?: boolean;
+  sessionDetails?: boolean;
   browser: boolean;
   credentialFile?: boolean;
   onboarding?: boolean;
@@ -134,8 +135,10 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   }
   const selection = options.project?.length ? {
     projects: await explicitProjects(options.project), history: options.history ?? false, background: options.background ?? false,
+    sessionDetails: options.sessionDetails ?? previous?.sessionDetails ?? false,
   } : await chooseProjects(roots, previous?.projects ?? [], {
     ...options,
+    previousSessionDetails: previous?.sessionDetails,
     allowEmpty: Boolean(previous) && !connection,
     onDiscovered: connection && (async (repositoriesFound, localSessionsFound) => {
       await connection.update({ phase: "choosing", repositoriesFound, localSessionsFound });
@@ -170,7 +173,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     const projects = selection.projects.map((project) => ({ ...project, since: selection.history ? historyStart : sinceByPath.get(project.directory) ?? now }));
     if (previous) {
       const removed = previous.projects.filter((prior) => !retained.includes(prior));
-      storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot }, removed);
+      storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot, sessionDetails: selection.sessionDetails || undefined }, removed);
       workspaceId = previous.workspaceId;
     } else {
       const sources = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"], sessionSourceLabel.cursor];
@@ -184,6 +187,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
         apiOrigin, projects, startedAt: now, account: randomUUID(), credentialStore: credentialFile ? "file" : "keychain",
         codexRoot: roots.codexRoot, codexArchiveRoot: roots.codexArchiveRoot,
         claudeRoot: roots.claudeRoot, cursorRoot: roots.cursorRoot, openCodeRoot: roots.openCodeRoot,
+        sessionDetails: selection.sessionDetails || undefined,
       }, approvedToken);
     }
   } finally {
@@ -193,6 +197,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     console.info("Uploads are paused. Run tideline enable to choose repositories again.");
     return;
   }
+  if (selection.sessionDetails) console.info("Session details are enabled for Codex and Claude Code.");
   if (selection.background) await startBackgroundSync();
   else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
   if (connection && !await connection.update({ phase: "ready", checkoutsSelected: selection.projects.length, background: selection.background })) {
@@ -236,6 +241,7 @@ async function collectNewSessions(
   const scope = createApprovedScope(config.projects);
   const options = {
     live: true as const,
+    captureDetails: config.sessionDetails,
     ...scope,
     sessionAllowed: (candidate: SessionCandidate) => scope.sessionAllowed(candidate) &&
       (!retry || retry.candidates.has(sessionKey(candidate))),
@@ -259,35 +265,46 @@ async function collectNewSessions(
       commits: await findSessionCommits(project, evidence.commitCandidates),
     };
 
-    const candidate = sessionImportRequest.safeParse({
+    const { capture, ...projection } = result.session;
+    const upload = {
       version: 1, workspaceId: config.workspaceId,
       session: {
-        ...result.session, source,
+        ...projection, source,
         analytics: analytics && { ...analytics, repository: repositories.get(project) ?? null },
         review,
         events: result.session.events.map((event) => ({ ...event, text: redactConversationText(event.text) })),
       },
-    });
+    };
+    const candidate = sessionImportRequest.safeParse(upload);
     if (!candidate.success) {
       console.warn(`${source}: skipped a session outside the supported message format or limits.`);
       return;
     }
 
-    const session = candidate.data.session;
-    const lastMessage = session.events.at(-1);
-    if (!lastMessage) return;
-    const body = JSON.stringify(candidate.data);
-    if (Buffer.byteLength(body) > MAX_CODEX_IMPORT_BYTES) {
+    const baseBody = JSON.stringify(candidate.data);
+    if (Buffer.byteLength(baseBody) > MAX_CODEX_IMPORT_BYTES) {
       console.warn(`${source}: a session exceeded the 1 MiB upload limit.`);
       return;
     }
+    const expanded = config.sessionDetails && capture
+      ? sessionImportRequest.safeParse({ ...candidate.data, session: { ...candidate.data.session, capture } })
+      : undefined;
+    if (expanded && !expanded.success) {
+      console.warn(`${source}: synced the conversation without session details outside the supported format or limits.`);
+    }
+    const data = expanded?.success ? expanded.data : candidate.data;
+    const session = data.session;
+    const lastMessage = session.events.at(-1);
+    if (!lastMessage) return;
+    const body = expanded?.success ? JSON.stringify(data) : baseBody;
 
     const phase = storage.queue({
       sessionKey: sessionKey(session),
       projectDirectory,
       fingerprint: createHash("sha256").update(body).digest("hex"),
       messageCount: session.events.length,
-      tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0, session.review?.throughLine ?? 0),
+      tailLine: Math.max(lastMessage.line, session.analytics?.throughLine ?? 0, session.activity?.throughLine ?? 0,
+        session.review?.throughLine ?? 0, session.capture?.throughLine ?? 0),
       projection: session.activity ? 2 : 1,
       body,
     }, retry?.id);
@@ -575,6 +592,7 @@ export async function syncStatus() {
       console.info(`Project: ${terminalText(directory)} (${since === historyStart ? "includes older sessions" : `new sessions since ${since}`})`);
     }
     console.info(`Background sync: ${await readBackgroundStatus(storage)}.`);
+    console.info(`Session details: ${config.sessionDetails ? "on for Codex and Claude Code" : "off"}.`);
     if (!config.cursorRoot) {
       console.info("To include Cursor and OpenCode, run tideline sync revoke, then set up sync again.");
     }

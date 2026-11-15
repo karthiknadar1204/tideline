@@ -61,6 +61,7 @@ function CliGuide() {
           ["sync revoke", "End the collector’s authorization. Run onboard again to connect it to a different workspace."],
         ]} />
         <p><code>connect</code>, <code>enable</code>, <code>disable</code>, and <code>upload</code> also open the repository picker. To select folders in a script, pass <code>--project /path/to/repository --conversations</code>. Add <code>--history</code> for older sessions or <code>--background</code> to start sync immediately.</p>
+        <p>To include recorded files, setup, and tool details for Codex and Claude Code, run <code>tideline sync setup --session-details</code>. Add <code>--history</code> if you also want to collect these details from older sessions in the repositories you select.</p>
       </section>
       <section aria-labelledby="import-export">
         <h2 id="import-export">Import, export, and query</h2>
@@ -96,6 +97,7 @@ function Dashboard() {
         <h2 id="sessions">Find and read sessions</h2>
         <p>A session is a coding conversation saved by an agent. Open <strong>Sessions</strong> to search its title or text. Filter by repository and agent, or expand <strong>More filters</strong> for model and UTC dates.</p>
         <p>Open a session to read the conversation and any recorded tool calls, skills, and child agent runs. A tool marked <strong>Returned</strong> produced a result. Its child agent can still be running. Tideline shows the last status recorded in the parent session.</p>
+        <p>When session details are enabled, expand a tool in <strong>Timeline</strong> to read its recorded input and output. Open <strong>Files</strong> for diffs recorded by the agent, or <strong>Setup</strong> for available runtime settings.</p>
         <p>When the collector can verify a commit reported in the session, the session shows its SHA and a link for GitHub or GitLab origins. Safety findings show the rule and log line for a possible credential or risky command. Review the finding in context.</p>
       </section>
       <section aria-labelledby="reports">
@@ -171,8 +173,8 @@ function DataAndPrivacy() {
         <h2 id="uploads">What uploads contain</h2>
         <p>The CLI sends user and assistant conversation text from approved repositories and any supported metadata. That can include a repository name, agent, model, usage, tool names and status, skill names, child run status, verified commits, and safety findings. The fields depend on the agent and its saved records.</p>
         <p>Cursor sends conversation and repository data and available model names. OpenCode can also include reported token counts. Tideline currently shows cost and activity for supported Codex and Claude Code records.</p>
-        <p>Raw tool inputs and outputs, skill instructions, child agent transcripts, local repository paths, and attachments stay on your machine. Conversation text can still contain code and other sensitive details. The collector redacts common credential patterns. Review which repositories you approve.</p>
-        <p>Each upload is limited to 1 MiB and 500 messages. The collector checks local files and databases about every two seconds while it runs. It queues uploads locally and retries after reconnecting.</p>
+        <p>Session details are optional. When enabled for Codex or Claude Code, the CLI also sends tool input and output text, recorded repository diffs, and selected setup metadata. These details can include source code and command output. The CLI redacts common credential patterns. Shared session links include the conversation only.</p>
+        <p>Each upload includes up to 1 MiB and 500 messages for the conversation and its standard metadata. Optional session details have a separate 512 KiB limit. The collector checks local files and databases about every two seconds while it runs. It queues uploads locally and retries after reconnecting.</p>
       </section>
       <section aria-labelledby="access">
         <h2 id="access">Who can read sessions</h2>
@@ -181,7 +183,7 @@ function DataAndPrivacy() {
       </section>
       <section aria-labelledby="stop">
         <h2 id="stop">Stop future uploads</h2>
-        <p>Run <code>sync setup</code> and clear a repository to stop collecting from it. Use <code>sync stop</code> to stop the background process, or <code>sync revoke</code> to end the collector’s access. Sessions already uploaded stay in the workspace.</p>
+        <p>Run <code>sync setup</code> and clear a repository to stop collecting from it. To stop sending session details, run <code>tideline sync setup --no-session-details</code>. Use <code>sync stop</code> to stop the background process, or <code>sync revoke</code> to end the collector’s access. Sessions already uploaded stay in the workspace.</p>
       </section>
     </>
   );

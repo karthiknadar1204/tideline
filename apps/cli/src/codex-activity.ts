@@ -1,6 +1,8 @@
 import { activityName, codexSkillInstructions, MAX_SESSION_ACTIVITY_ITEMS } from "@tideline/contracts";
 import type { SessionActivity } from "@tideline/contracts";
 import { z } from "zod";
+import { fileReplacement, hasSensitiveToolPath, unifiedHunks } from "./session-capture";
+import type { SessionCaptureBuilder } from "./session-capture";
 import type { createSessionSafety } from "./session-safety";
 
 type ToolCall = SessionActivity["tools"][number];
@@ -17,6 +19,8 @@ const responseActivity = z.object({
   success: z.unknown().optional(),
   is_error: z.unknown().optional(),
   arguments: z.unknown().optional(),
+  input: z.unknown().optional(),
+  action: z.unknown().optional(),
   output: z.unknown().optional(),
 });
 const eventActivity = z.object({
@@ -47,8 +51,16 @@ const toolItem = z.object({
   stdout: z.string().nullish(),
   stderr: z.string().nullish(),
   aggregated_output: z.string().nullish(),
+  arguments: z.unknown().optional(),
   result: z.unknown().optional(),
+  output: z.unknown().optional(),
+  changes: z.unknown().optional(),
 });
+const codexFileChange = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("add"), content: z.string().optional() }),
+  z.object({ type: z.literal("delete"), content: z.string().optional() }),
+  z.object({ type: z.literal("update"), unified_diff: z.string().optional(), move_path: z.string().nullish() }),
+]);
 const commandArguments = z.object({
   cmd: z.string().optional(),
   command: z.union([z.string(), z.array(z.string())]).optional(),
@@ -129,11 +141,12 @@ function agentStatus(value: unknown): ChildRun["status"] {
   return "unknown";
 }
 
-export function createCodexActivity(safety?: ReturnType<typeof createSessionSafety>) {
+export function createCodexActivity(safety?: ReturnType<typeof createSessionSafety>, capture?: SessionCaptureBuilder) {
   const tools = new Map<string, ToolCall>();
   const children = new Map<string, ChildRun>();
   const skills: SkillUse[] = [];
   const selectedChildren = new Map<string, string>();
+  const privateTools = new Set<string>();
   let throughLine = 0;
   let truncated = false;
 
@@ -148,6 +161,7 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
     } else {
       truncated = true;
     }
+    return tools.get(id);
   }
 
   function writeChild({ id, name, status, line, index, allowNew }: {
@@ -195,7 +209,12 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       }
       const status = explicitToolFailure(item.status, item.success) ? "failed" :
         item.type === "web_search_call" && item.status === "completed" ? "returned" : "called";
-      writeTool(id, name, status, line);
+      const tool = writeTool(id, name, status, line);
+      if (tool && capture) {
+        const input = item.input ?? item.arguments ?? item.action;
+        if (hasSensitiveToolPath(input)) privateTools.add(id);
+        capture.tool(tool, line, privateTools.has(id) ? { truncated: true } : { input });
+      }
       return;
     }
     if (item.type !== "function_call_output" && item.type !== "custom_tool_call_output" &&
@@ -208,7 +227,9 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       safety.result({ id, output: envelope?.[2] ?? item.output, line,
         success: failed ? false : envelope ? envelope[1] === "0" : undefined });
     }
-    writeTool(id, name, failed ? "failed" : "returned", line);
+    const tool = writeTool(id, name, failed ? "failed" : "returned", line);
+    if (tool && capture) capture.tool(tool, line, privateTools.has(id) || hasSensitiveToolPath(item.output)
+      ? { truncated: true } : { output: item.output });
     if (failed) return;
 
     if (spawnToolNames.has(name)) {
@@ -245,7 +266,9 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
     });
   }
 
-  function event(value: unknown, line: number, sessionId: string, projectDirectory?: string) {
+  function event(value: unknown, line: number, sessionId: string, projectDirectory?: string, checkout?: {
+    root: string; workingDirectory: string;
+  }) {
     const parsed = eventActivity.safeParse(value).data;
     if (!parsed || (parsed.thread_id && parsed.thread_id !== sessionId)) return;
     if (parsed.type === "sub_agent_activity") {
@@ -299,8 +322,39 @@ export function createCodexActivity(safety?: ReturnType<typeof createSessionSafe
       item.type === "DynamicToolCall" ? qualifiedName(item.namespace, item.tool) :
       item.type === "FunctionCallOutput" ? qualifiedName(item.namespace, item.name) : undefined
     );
-    if (name) writeTool(item.id, tools.get(item.id)?.name ?? name, status, line,
+    if (!name) return;
+    const tool = writeTool(item.id, tools.get(item.id)?.name ?? name, status, line,
       item.type === "McpToolCall" ? safeName(item.server) : undefined);
+    if (!capture) return;
+
+    if (tool) {
+      const commandOutput = item.stdout == null && item.stderr == null
+        ? item.aggregated_output : [item.stdout, item.stderr].filter(Boolean).join("\n");
+      const output = parsed.type === "item_completed" ? item.result ?? item.output ?? commandOutput : undefined;
+      if (hasSensitiveToolPath(item.arguments)) privateTools.add(item.id);
+      capture.tool(tool, line, privateTools.has(item.id) || hasSensitiveToolPath(output)
+        ? { truncated: true } : { input: item.arguments ?? item.command, output });
+    }
+    if (!checkout || item.type !== "FileChange" || parsed.type !== "item_completed" || status === "failed" ||
+        item.status !== "completed") return;
+    const changes = z.record(z.string(), z.unknown()).safeParse(item.changes).data;
+    if (!changes) return;
+    for (const [index, [path, value]] of Object.entries(changes).entries()) {
+      const change = codexFileChange.safeParse(value).data;
+      if (!change) continue;
+      switch (change.type) {
+        case "add":
+          capture.file({ ...checkout, line, index, path, change: "added", diff: () => fileReplacement(undefined, change.content, true) });
+          break;
+        case "delete":
+          capture.file({ ...checkout, line, index, path, change: "deleted", diff: () => fileReplacement(change.content, undefined, true) });
+          break;
+        case "update":
+          capture.file({ ...checkout, line, index, path: change.move_path ?? path, change: change.move_path ? "renamed" : "modified",
+            previousPath: change.move_path ? path : undefined, diff: () => unifiedHunks(change.unified_diff) });
+          break;
+      }
+    }
   }
 
   function skill(value: string, line: number, index: number) {

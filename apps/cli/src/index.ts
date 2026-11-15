@@ -59,6 +59,8 @@ function setupOptions(command: Command) {
     .option("--history", "Include older sessions in the selected projects")
     .option("--background", "Start the collector in the background")
     .option("--conversations", "Approve uploading conversations and available metadata from --project")
+    .option("--session-details", "Also upload recorded tool text, file changes, and setup from Codex and Claude Code")
+    .option("--no-session-details", "Stop including session details in future uploads")
     .option("--credential-file", "Use an owner-only file in place of the system keychain")
     .option("--no-browser", "Show the approval link without opening your browser");
 }

@@ -1,7 +1,11 @@
-import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { MAX_CODEX_IMPORT_EVENTS, MAX_SESSION_CAPTURE_BYTES, modelTokens } from "@tideline/contracts";
 import type { ModelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createClaudeActivity } from "./claude-activity";
+import { createSessionCapture, isSensitiveFile } from "./session-capture";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
@@ -28,6 +32,10 @@ const claudeRecord = claudeMetadata.extend({
   parentUuid: z.unknown().optional(),
   turnCompanion: z.boolean().optional().catch(undefined),
   message: z.unknown().optional(),
+  version: z.unknown().optional(),
+  entrypoint: z.unknown().optional(),
+  gitBranch: z.unknown().optional(),
+  permissionMode: z.unknown().optional(),
 });
 const claudeMessage = z.object({
   role: z.enum(["user", "assistant"]),
@@ -106,6 +114,40 @@ function retainCacheBreakdown(selected: ModelTokens, other: ModelTokens) {
   return { ...selected, cacheWrite5m, cacheWrite1h, cacheWriteUnknown };
 }
 
+async function readPersistedOutput(transcript: string, sessionId: string, reference: string) {
+  const name = basename(reference);
+  if (basename(transcript) !== `${sessionId}.jsonl` || !/^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$/u.test(name) ||
+      isSensitiveFile(name)) return;
+  const directory = join(dirname(transcript), sessionId, "tool-results");
+  const path = join(directory, name);
+  if (path !== reference || await realpath(directory).catch(() => undefined) !== directory) return;
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(() => undefined);
+  if (!file) return;
+  try {
+    const initial = await file.stat();
+    if (!initial.isFile() || initial.nlink !== 1) return;
+    const size = Math.min(initial.size, MAX_SESSION_CAPTURE_BYTES);
+    const bytes = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await file.read(bytes, offset, size - offset, offset);
+      if (!bytesRead) return;
+      offset += bytesRead;
+    }
+    const current = await lstat(path);
+    if (!current.isFile() || current.ino !== initial.ino || current.dev !== initial.dev ||
+        current.nlink !== 1 || current.size !== initial.size || current.mtimeMs !== initial.mtimeMs ||
+        current.ctimeMs !== initial.ctimeMs || await realpath(directory) !== directory || bytes.includes(0)) return;
+    const truncated = size < initial.size;
+    const output = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: truncated });
+    return { output, truncated };
+  } catch {
+    return;
+  } finally {
+    await file.close();
+  }
+}
+
 export function readClaudeSession(path: string): Promise<SessionProjection>;
 export function readClaudeSession(path: string, options: LiveReadOptions): Promise<LiveSession | undefined>;
 export async function readClaudeSession(path: string, options?: LiveReadOptions): Promise<SessionProjection | LiveSession | undefined> {
@@ -117,11 +159,12 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   let checkout: string | undefined;
   const usage = createModelUsage();
   const safety = options ? createSessionSafety() : undefined;
-  const activity = createClaudeActivity(safety);
+  const capture = options?.captureDetails ? createSessionCapture() : undefined;
+  const activity = createClaudeActivity(safety, capture);
   const apiMessages = new Map<string, { model: string | null; tokens: ModelTokens | null }>();
   let throughLine = 0;
 
-  for await (const { value, line } of readJsonl(path, options?.live)) {
+  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails)) {
     const parsed = claudeRecord.safeParse(value);
     if (!parsed.success) throw new Error(`Invalid Claude Code record at line ${line}.`);
     const record = parsed.data;
@@ -134,7 +177,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       throw new Error("Select a JSONL file containing exactly one Claude Code session.");
     }
 
-    let inProject = false;
+    let scopedDirectory: string | undefined;
     if (options) {
       if (!session && options.since !== undefined && Date.parse(at.data) < options.since) return;
       const directory = await projectScope(record.cwd);
@@ -147,7 +190,7 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
       } else if (checkoutOf && checkoutOf(directory) !== checkout) {
         return;
       }
-      inProject = directory === projectDirectory;
+      scopedDirectory = directory;
     }
     session ??= { source: "claude-code", sourceSessionId: id.data, startedAt: at.data };
 
@@ -160,9 +203,17 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
     if (!message.success || message.data.role !== record.type || message.data.model === "<synthetic>") continue;
 
     const isTaskNotification = record.origin?.kind === "task-notification";
-    activity.observe({
+    capture?.setup(line, {
+      clientVersion: record.version, entrypoint: record.entrypoint, branch: record.gitBranch,
+      permissionMode: record.permissionMode, model: readModelId(message.data.model),
+    });
+    const root = checkout ?? options?.projectDirectory ?? projectDirectory;
+    await activity.observe({
       line, role: message.data.role, content: message.data.content, metadata: record.toolUseResult,
-      isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid, inProject,
+      isTaskNotification, attributionSkill: record.attributionSkill, uuid: record.uuid,
+      inProject: scopedDirectory === projectDirectory && scopedDirectory !== undefined,
+      checkout: root && scopedDirectory ? { root, workingDirectory: scopedDirectory } : undefined,
+      readToolOutput: capture ? (reference) => readPersistedOutput(path, id.data, reference) : undefined,
     });
     if (record.toolUseResult !== undefined || record.sourceToolAssistantUUID !== undefined || isTaskNotification) continue;
 
@@ -224,7 +275,8 @@ export async function readClaudeSession(path: string, options?: LiveReadOptions)
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity },
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity,
+          capture: capture?.snapshot(events.at(-1)?.line ?? 0) },
         evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
     }
     return;

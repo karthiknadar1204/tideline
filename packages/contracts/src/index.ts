@@ -189,6 +189,56 @@ export const codexSkillInstructions = /^<skill>\r?\n<name>([^\r\n<>]+)<\/name>\r
 export const codexSkillCatalog = /^<skills_instructions>[^]*<\/skills_instructions>$/u;
 const activityLocation = z.strictObject({ line: z.int().positive(), index: z.int().nonnegative() });
 
+export const MAX_SESSION_CAPTURE_BYTES = 512 * 1024;
+export const MAX_SESSION_CAPTURE_TEXT = 96 * 1024;
+export const MAX_SESSION_CAPTURE_FILES = 250;
+
+const captureText = z.string().max(MAX_SESSION_CAPTURE_TEXT).refine((text) => !/[\0\uD800-\uDFFF]/u.test(text));
+const setupValue = z.string().min(1).max(180).refine((text) => !/[\u0000-\u001f\u007f\uD800-\uDFFF]/u.test(text));
+const capturePath = z.string().min(1).max(512).refine((path) => (
+  !/[\\\u0000-\u001f\u007f\uD800-\uDFFF]/u.test(path) &&
+  !/^[A-Za-z]:/u.test(path) &&
+  path.split("/").every((part) => part && part !== ".." && part !== ".")
+), { message: "Use a repository-relative path." });
+
+export const sessionCapture = z.strictObject({
+  throughLine: z.int().positive(),
+  truncated: z.boolean(),
+  tools: z.array(activityLocation.extend({
+    input: captureText.nullable(),
+    output: captureText.nullable(),
+    truncated: z.boolean(),
+  })).max(MAX_SESSION_ACTIVITY_ITEMS),
+  files: z.array(activityLocation.extend({
+    path: capturePath,
+    previousPath: capturePath.nullable(),
+    change: z.enum(["added", "modified", "deleted", "renamed"]),
+    diff: captureText.nullable(),
+    truncated: z.boolean(),
+  })).max(MAX_SESSION_CAPTURE_FILES),
+  setup: z.strictObject({
+    clientVersion: setupValue.optional(),
+    entrypoint: setupValue.optional(),
+    branch: setupValue.optional(),
+    provider: setupValue.optional(),
+    model: setupValue.optional(),
+    reasoningEffort: setupValue.optional(),
+    approvalPolicy: setupValue.optional(),
+    sandboxMode: setupValue.optional(),
+    permissionMode: setupValue.optional(),
+  }),
+}).refine(({ tools, files, throughLine }) => (
+  tools.every(({ line }) => line <= throughLine) &&
+  files.every(({ line }) => line <= throughLine) &&
+  new Set(tools.map(({ line, index }) => `${line}:${index}`)).size === tools.length &&
+  new Set(files.map(({ line, index, path }) => `${line}:${index}:${path}`)).size === files.length
+), { message: "Session details must have unique locations covered by their source cursor." })
+  .refine((capture) => new TextEncoder().encode(JSON.stringify(capture)).byteLength <= MAX_SESSION_CAPTURE_BYTES, {
+    message: "Session details exceed 512 KiB.",
+  });
+
+export type SessionCapture = z.infer<typeof sessionCapture>;
+
 function activityRows<T extends z.ZodType>(row: T) {
   return z.array(row).max(MAX_SESSION_ACTIVITY_ITEMS);
 }
@@ -284,6 +334,7 @@ export const sessionImportRequest = z.strictObject({
     analytics: sessionAnalytics.optional(),
     activity: sessionActivity.optional(),
     review: sessionReview.optional(),
+    capture: sessionCapture.optional(),
   }).refine(
     ({ analytics, events }) => !analytics || analytics.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["analytics", "throughLine"], message: "Analytics must cover the last conversation message." },
@@ -293,6 +344,11 @@ export const sessionImportRequest = z.strictObject({
   ).refine(
     ({ review, events }) => !review || review.throughLine >= (events.at(-1)?.line ?? 0),
     { path: ["review", "throughLine"], message: "Review must cover the last conversation message." },
+  ).refine(
+    ({ capture, source, events }) => !capture || (
+      (source === "codex" || source === "claude-code") && capture.throughLine >= (events.at(-1)?.line ?? 0)
+    ),
+    { path: ["capture"], message: "Session details must cover the conversation and come from a supported agent." },
   ),
 });
 
@@ -324,6 +380,9 @@ export const sessionDetailResponse = sessionSummaryResponse.extend({
   activity: activityDetail.nullable(),
   review: reviewDetail.nullable(),
 });
+
+export const workspaceSessionDetailResponse = sessionDetailResponse.extend({ capture: sessionCapture.nullable() });
+export type WorkspaceSessionDetail = z.infer<typeof workspaceSessionDetailResponse>;
 
 export const sessionShareToken = z.string().regex(/^tdshare_[0-9a-f]{64}$/);
 

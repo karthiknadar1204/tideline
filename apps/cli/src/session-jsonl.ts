@@ -10,6 +10,7 @@ export type SessionProjection = SessionImportRequest["session"];
 export type SessionCandidate = Pick<SessionProjection, "source" | "sourceSessionId" | "startedAt"> & { projectDirectory: string };
 export type LiveReadOptions = {
   live: true;
+  captureDetails?: boolean;
   projectDirectory?: string;
   projectScope?: (directory: string | undefined) => Promise<string | undefined>;
   projectRoot?: (directory: string) => string | undefined;
@@ -26,7 +27,7 @@ export function sourceSessionUuid(source: SessionSource, nativeId: string) {
 
 const chunkSize = 32 * 1024;
 
-export async function* readJsonl(path: string, live = false): AsyncGenerator<{ value: unknown; line: number }> {
+export async function* readJsonl(path: string, live = false, captureDetails = false): AsyncGenerator<{ value: unknown; line: number }> {
   const flags = constants.O_RDONLY | constants.O_NONBLOCK | (live ? constants.O_NOFOLLOW : 0);
   const file = await open(path, flags).catch(() => {
     throw new Error("Could not open the selected session JSONL file.");
@@ -36,6 +37,7 @@ export async function* readJsonl(path: string, live = false): AsyncGenerator<{ v
   let position = 0;
   let line = 0;
   let remainder = Buffer.alloc(0);
+  const limit = live && captureDetails ? 8 * 1024 * 1024 : MAX_CODEX_IMPORT_BYTES;
 
   function parse(bytes: Uint8Array) {
     line++;
@@ -63,7 +65,7 @@ export async function* readJsonl(path: string, live = false): AsyncGenerator<{ v
     }
 
     const buffer = Buffer.alloc(chunkSize);
-    const end = Math.min(initial.size, MAX_CODEX_IMPORT_BYTES);
+    const end = Math.min(initial.size, limit);
 
     while (position < end) {
       const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, end - position), position);
@@ -82,8 +84,8 @@ export async function* readJsonl(path: string, live = false): AsyncGenerator<{ v
       remainder = data.subarray(start);
     }
 
-    if (initial.size > MAX_CODEX_IMPORT_BYTES) {
-      throw new Error("The selected file exceeds the 1 MiB import limit.");
+    if (initial.size > limit) {
+      throw new Error(`The selected file exceeds the ${limit / (1024 * 1024)} MiB import limit.`);
     }
     if (!live && remainder.length) {
       const record = parse(remainder);

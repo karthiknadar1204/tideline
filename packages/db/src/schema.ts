@@ -1,5 +1,5 @@
 import { savedReportVisibility as savedReportVisibilityContract, sessionSource as sessionSourceContract } from "@tideline/contracts";
-import type { CliSetupProgress, SessionActivity, SessionAnalytics, SessionImportRequest, SessionReview, SharedSessionSnapshot, UsageGoal } from "@tideline/contracts";
+import type { CliSetupProgress, SessionActivity, SessionAnalytics, SessionCapture, SessionImportRequest, SessionReview, SharedSessionSnapshot, UsageGoal } from "@tideline/contracts";
 import { sql } from "drizzle-orm";
 import { check, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
@@ -77,6 +77,8 @@ export const agentSessions = pgTable("codex_sessions", {
   readyActivity: jsonb("ready_activity").$type<SessionActivity>(),
   pendingReview: jsonb("pending_review").$type<SessionReview>(),
   readyReview: jsonb("ready_review").$type<SessionReview>(),
+  pendingCapture: jsonb("pending_capture").$type<SessionCapture>(),
+  readyCapture: jsonb("ready_capture").$type<SessionCapture>(),
 }, (table) => [
   unique("agent_sessions_workspace_source_unique").on(table.workspaceId, table.source, table.sourceSessionId),
   index("agent_sessions_workspace_receipt_index").on(table.workspaceId, table.receivedAt.desc(), table.id.desc()),

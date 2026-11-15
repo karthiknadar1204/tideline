@@ -32,6 +32,7 @@ const sharedConfig = z.strictObject({
   claudeRoot: z.string().min(1),
   cursorRoot: z.string().min(1).optional(),
   openCodeRoot: z.string().min(1).optional(),
+  sessionDetails: z.boolean().optional(),
   revoked: z.boolean().optional(),
 });
 
@@ -232,6 +233,9 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
           db.exec("DELETE FROM uploads WHERE phase <> 'received' AND project_directory IS NULL");
           const remove = db.prepare("DELETE FROM uploads WHERE phase <> 'received' AND project_directory = ?");
           for (const { directory } of removed) remove.run(directory);
+        }
+        if (!config.sessionDetails) {
+          db.exec("DELETE FROM uploads WHERE phase = 'queued' AND json_type(body, '$.session.capture') IS NOT NULL");
         }
         db.prepare("UPDATE config SET value = ? WHERE id = 1").run(JSON.stringify(config));
         db.exec("COMMIT");

@@ -8,20 +8,22 @@ import styles from "../sessions.module.css";
 const views = [
   { id: "timeline", label: "Timeline" },
   { id: "conversation", label: "Conversation" },
+  { id: "files", label: "Files" },
+  { id: "setup", label: "Setup" },
   { id: "usage", label: "Usage" },
   { id: "review", label: "Review" },
 ] as const;
 
 type View = typeof views[number]["id"];
+type StandaloneView = Exclude<View, "timeline" | "conversation">;
 export type ReaderEntry = { key: string; kind: "message" | "activity"; content: ReactNode };
 export type ReaderPrompt = { key: string; preview: string };
 
-export function SessionReader({ entries, prompts, context, usage, review, activityNote }: {
+export function SessionReader({ entries, prompts, context, panels, activityNote }: {
   entries: ReaderEntry[];
   prompts: ReaderPrompt[];
   context: ReactNode;
-  usage: ReactNode;
-  review: ReactNode;
+  panels: Record<StandaloneView, ReactNode>;
   activityNote: string | undefined;
 }) {
   const requested = useSearchParams().get("view");
@@ -73,7 +75,7 @@ export function SessionReader({ entries, prompts, context, usage, review, activi
         </div>
         {views.map(({ id }) => (
           <div key={id} hidden={id !== active} className={styles.tracePanel} role="tabpanel" id={`session-panel-${id}`} aria-labelledby={`session-tab-${id}`} tabIndex={0}>
-            {id === active && (showsConversation ? (
+            {id === active && (id === "timeline" || id === "conversation" ? (
               <>
                 {active === "timeline" && activityNote && <p className={styles.traceNote}>{activityNote}</p>}
                 <ol aria-label={active === "timeline" ? "Session timeline" : "Conversation"} className={styles.timeline}>
@@ -82,7 +84,7 @@ export function SessionReader({ entries, prompts, context, usage, review, activi
                   ))}
                 </ol>
               </>
-            ) : active === "usage" ? usage : review)}
+            ) : panels[id])}
           </div>
         ))}
       </section>

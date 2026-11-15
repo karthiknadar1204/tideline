@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
 import type {
-  CliSessionListQuery, SessionActivity, SessionImportRequest, SessionSummary,
+  CliSessionListQuery, SessionActivity, SessionCapture, SessionImportRequest, SessionSummary,
   WorkspaceActivityKind, WorkspaceActivityQuery, WorkspaceSessionSearchQuery,
 } from "@tideline/contracts";
 import { and, asc, count, desc, eq, gt, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
@@ -62,12 +62,15 @@ async function receiveSession(
   allowAppend: boolean,
   uploadedBy: string | null,
 ) {
-  const { source, sourceSessionId, startedAt, events, analytics, activity, review } = session;
+  const { source, sourceSessionId, startedAt, events, analytics, activity, review, capture } = session;
   const messages = source === "codex" ? withoutLegacySkillContext(events) : events;
   if (!messages.length) return null;
   const [created] = await transaction
     .insert(agentSessions)
-    .values({ workspaceId, uploadedBy, source, sourceSessionId, startedAt, messages, pendingAnalytics: analytics, pendingActivity: activity, pendingReview: review })
+    .values({
+      workspaceId, uploadedBy, source, sourceSessionId, startedAt, messages,
+      pendingAnalytics: analytics, pendingActivity: activity, pendingReview: review, pendingCapture: capture,
+    })
     .onConflictDoNothing({ target: [agentSessions.workspaceId, agentSessions.source, agentSessions.sourceSessionId] })
     .returning({ id: agentSessions.id });
 
@@ -83,6 +86,7 @@ async function receiveSession(
     analytics: agentSessions.pendingAnalytics,
     activity: agentSessions.pendingActivity,
     review: agentSessions.pendingReview,
+    capture: sql<SessionCapture | null>`coalesce(${agentSessions.pendingCapture}, ${agentSessions.readyCapture})`,
   }).from(agentSessions).where(and(
     eq(agentSessions.workspaceId, workspaceId),
     eq(agentSessions.source, source),
@@ -150,7 +154,10 @@ async function receiveSession(
     };
     if (!isDeepStrictEqual(existing.review, next)) reviewUpdate = next;
   }
-  if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate && !reviewUpdate) return replay;
+  const previousCaptureLine = existing.capture?.throughLine ?? 0;
+  if (capture?.throughLine === previousCaptureLine && !isDeepStrictEqual(existing.capture, capture)) return null;
+  const captureUpdate = capture && capture.throughLine > previousCaptureLine ? capture : undefined;
+  if (lengthDifference === 0 && !analyticsUpdate && !activityUpdate && !reviewUpdate && !captureUpdate) return replay;
 
   await transaction.update(agentSessions)
     .set({
@@ -161,6 +168,7 @@ async function receiveSession(
       },
       pendingActivity: activityUpdate,
       pendingReview: reviewUpdate,
+      pendingCapture: captureUpdate,
     })
     .where(eq(agentSessions.id, existing.id));
 
@@ -330,13 +338,14 @@ export function createSessionStore(databaseUrl: string) {
       return { sessions, nextCursor: rows.length > sessions.length ? sessions[CLI_SESSION_PAGE_SIZE - 1].id : null };
     },
 
-    async findReady(workspaceId: string, sessionId: string) {
+    async findReady(workspaceId: string, sessionId: string, { includeCapture = false } = {}) {
       const [session] = await db.select({
         ...summaryFields,
         activity: agentSessions.readyActivity,
         review: agentSessions.readyReview,
         sourceSessionId: agentSessions.sourceSessionId,
         messages: agentSessions.messages,
+        ...(includeCapture && { capture: agentSessions.readyCapture }),
       }).from(agentSessions).where(and(
         eq(agentSessions.workspaceId, workspaceId),
         eq(agentSessions.id, sessionId),
@@ -365,6 +374,7 @@ export function createSessionStore(databaseUrl: string) {
           analytics: agentSessions.pendingAnalytics,
           activity: agentSessions.pendingActivity,
           review: agentSessions.pendingReview,
+          capture: agentSessions.pendingCapture,
         }).from(agentSessions)
           .where(sql`${agentSessions.readyMessageCount} < jsonb_array_length(${agentSessions.messages})
             or (${agentSessions.pendingAnalytics} ->> 'throughLine')
@@ -372,7 +382,8 @@ export function createSessionStore(databaseUrl: string) {
             or (${agentSessions.pendingAnalytics} -> 'repository' ->> 'key')
               is distinct from (${agentSessions.readyAnalytics} -> 'repository' ->> 'key')
             or ${agentSessions.pendingActivity} is distinct from ${agentSessions.readyActivity}
-            or ${agentSessions.pendingReview} is distinct from ${agentSessions.readyReview}`)
+            or ${agentSessions.pendingReview} is distinct from ${agentSessions.readyReview}
+            or ${agentSessions.pendingCapture} is not null`)
           .orderBy(asc(agentSessions.receivedAt), asc(agentSessions.id))
           .limit(1)
           .for("update", { skipLocked: true });
@@ -389,7 +400,11 @@ export function createSessionStore(databaseUrl: string) {
           : analytics;
 
         await transaction.update(agentSessions)
-          .set({ title, readyMessageCount: pending.messages.length, readyAnalytics, readyActivity: pending.activity, readyReview: pending.review })
+          .set({
+            title, readyMessageCount: pending.messages.length, readyAnalytics,
+            readyActivity: pending.activity, readyReview: pending.review,
+            readyCapture: pending.capture ?? undefined, pendingCapture: null,
+          })
           .where(eq(agentSessions.id, pending.id));
 
         return pending.id;

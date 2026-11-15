@@ -1,6 +1,7 @@
 import { MAX_CODEX_IMPORT_EVENTS, modelTokens } from "@tideline/contracts";
 import { z } from "zod";
 import { createCodexActivity } from "./codex-activity";
+import { createSessionCapture } from "./session-capture";
 import { createProjectScope, readJsonl } from "./session-jsonl";
 import type { LiveReadOptions, LiveSession, SessionCandidate, SessionProjection } from "./session-jsonl";
 import { createSessionSafety } from "./session-safety";
@@ -19,8 +20,15 @@ const sessionMetadata = z.object({
   runtime_workspace_roots: z.array(z.string()).nullish(),
   thread_source: z.unknown().optional().optional(),
   source: z.unknown().optional(),
+  cli_version: z.unknown().optional(),
+  model_provider: z.unknown().optional(),
+  originator: z.unknown().optional(),
 });
-const turnContext = z.object({ cwd: z.string().optional(), model: z.unknown().optional() });
+const turnContext = z.object({
+  cwd: z.string().optional(), model: z.unknown().optional(), effort: z.unknown().optional(),
+  approval_policy: z.unknown().optional(),
+  sandbox_policy: z.object({ type: z.unknown() }).optional().catch(undefined),
+});
 const tokenEvent = z.object({ type: z.literal("token_count"), info: z.unknown().optional() });
 const codexTokenTotals = z.object({
   total_token_usage: z.object({
@@ -73,7 +81,8 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   let checkout: string | undefined;
   const usage = createModelUsage();
   const safety = options ? createSessionSafety() : undefined;
-  const activity = createCodexActivity(safety);
+  const capture = options?.captureDetails ? createSessionCapture() : undefined;
+  const activity = createCodexActivity(safety, capture);
   let currentProject: string | undefined;
   let throughLine = 0;
   let lastPromptLine = 0;
@@ -82,7 +91,7 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const modelsSinceLastUsage = new Set<string | null>();
   let previousTokens = zeroTokens();
 
-  for await (const { value, line } of readJsonl(path, options?.live)) {
+  for await (const { value, line } of readJsonl(path, options?.live, options?.captureDetails)) {
     const record = rolloutRecord.safeParse(value);
     if (!record.success) throw new Error(`Invalid Codex record at line ${line}.`);
 
@@ -110,6 +119,9 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
           if (!directory || (checkoutOf && checkoutOf(directory) !== checkout)) return;
         }
       }
+      capture?.setup(line, {
+        clientVersion: metadata.data.cli_version, provider: metadata.data.model_provider, entrypoint: metadata.data.originator,
+      });
       session = identity;
       continue;
     }
@@ -125,13 +137,21 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
         }
       }
       activeModel = readModelId(context.data?.model);
+      capture?.setup(line, {
+        model: activeModel,
+        reasoningEffort: context.data?.effort,
+        approvalPolicy: context.data?.approval_policy,
+        sandboxMode: context.data?.sandbox_policy?.type,
+      });
       modelsSinceLastUsage.add(activeModel);
       usage.add(activeModel, null);
       throughLine = line;
       continue;
     }
     if (record.data.type === "event_msg") {
-      activity.event(record.data.payload, line, session.sourceSessionId, projectDirectory);
+      const root = checkout ?? options?.projectDirectory ?? projectDirectory;
+      activity.event(record.data.payload, line, session.sourceSessionId, projectDirectory,
+        root && currentProject ? { root, workingDirectory: currentProject } : undefined);
       const count = tokenEvent.safeParse(record.data.payload);
       if (!count.success || count.data.info == null) continue;
       throughLine = line;
@@ -196,7 +216,8 @@ export async function readCodexSession(path: string, options?: LiveReadOptions):
   const sessionActivity = activity.snapshot(events.at(-1)?.line ?? 0);
   if (options) {
     if (session && projectDirectory && safety && events.length) {
-      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity },
+      return { projectDirectory, session: { ...session, events, analytics, activity: sessionActivity,
+          capture: capture?.snapshot(events.at(-1)?.line ?? 0) },
         evidence: safety.snapshot(events.at(-1)?.line ?? 0) };
     }
     return;

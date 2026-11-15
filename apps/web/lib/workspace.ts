@@ -1,6 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import {
-  sessionDetailResponse,
+  workspaceSessionDetailResponse,
   sessionSummariesResponse,
   workspaceAccess,
   workspaceAccessList,
@@ -101,7 +101,7 @@ export async function updateWorkspaceUsageTarget(workspaceId: string, update: Wo
 }
 
 export async function readWorkspaceSession(workspaceId: string, sessionId: string) {
-  return sessionDetailResponse.parse(
+  return workspaceSessionDetailResponse.parse(
     await requestWorkspaceResource(
       `${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}`,
     ),

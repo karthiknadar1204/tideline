@@ -1,6 +1,7 @@
-import type { SessionDetail } from "@tideline/contracts";
+import type { SessionCapture, SessionDetail } from "@tideline/contracts";
 import { ReportMarkdown } from "../../reports/saved/[reportId]/report-markdown";
 import styles from "../sessions.module.css";
+import { ToolPayload } from "./capture";
 import type { ReaderEntry, ReaderPrompt } from "./reader";
 
 type Activity = NonNullable<SessionDetail["activity"]>;
@@ -24,7 +25,7 @@ const statusLabels: Record<ActivityRecord["status"], string> = {
 };
 const timestamp = new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" });
 
-function RecordedActivity({ activity }: { activity: ActivityRecord }) {
+function RecordedActivity({ activity, payload }: { activity: ActivityRecord; payload?: SessionCapture["tools"][number] }) {
   const label = activityLabels[activity.kind];
   return (
     <details className={styles.event}>
@@ -38,16 +39,18 @@ function RecordedActivity({ activity }: { activity: ActivityRecord }) {
         <span>Log line {activity.line}</span>
         <span>Last recorded status {statusLabels[activity.status].toLowerCase()}</span>
       </div>
+      {activity.kind === "tool" && <ToolPayload payload={payload} />}
     </details>
   );
 }
 
-export function buildSessionTimeline(session: SessionDetail, agent: string) {
+export function buildSessionTimeline(session: SessionDetail, agent: string, capture: SessionCapture | null) {
   const activity: ActivityRecord[] = [
     ...session.activity?.tools.map((tool) => ({ ...tool, kind: "tool" as const })) ?? [],
     ...session.activity?.skills.map((skill) => ({ ...skill, kind: "skill" as const })) ?? [],
     ...session.activity?.children.map((child) => ({ ...child, kind: "child" as const })) ?? [],
   ];
+  const toolPayloads = new Map(capture?.tools.map((tool) => [`${tool.line}:${tool.index}`, tool]));
 
   const prompts: ReaderPrompt[] = [];
   const messages = session.messages.map((message) => {
@@ -78,13 +81,14 @@ export function buildSessionTimeline(session: SessionDetail, agent: string) {
       kind: "activity" as const,
       line: record.line,
       index: record.index,
-      content: <RecordedActivity activity={record} />,
+      content: <RecordedActivity activity={record} payload={record.kind === "tool" ? toolPayloads.get(`${record.line}:${record.index}`) : undefined} />,
     })),
   ].sort((left, right) => left.line - right.line || left.index - right.index)
     .map(({ key, kind, content }) => ({ key, kind, content }));
 
   const activityNote = session.activity?.truncated ? "Some activities are missing because this session reached the recording limit."
     : !session.activity ? "Activity details are unavailable for this session."
+    : capture?.truncated ? "Some tool details or file changes were omitted or reached a capture limit."
     : undefined;
 
   return { entries, prompts, activityNote };

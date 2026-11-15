@@ -92,6 +92,13 @@
       "when": 1794731386848,
       "tag": "0012_cli_setup_pairing",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794732884995,
+      "tag": "0013_session_capture",
+      "breakpoints": true
     }
   ]
 }

@@ -113,6 +113,7 @@ export async function chooseProjects(
   previous: ApprovedProject[],
   options: {
     workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean;
+    sessionDetails?: boolean; previousSessionDetails?: boolean;
     onDiscovered?: (repositoriesFound: number, localSessionsFound: number) => Promise<void>;
   },
 ) {
@@ -176,6 +177,7 @@ export async function chooseProjects(
   let initialValues = items.filter(({ active }) => active).map(({ value }) => value);
   let historyDefault = false;
   let backgroundDefault = true;
+  let detailsDefault = options.previousSessionDetails ?? false;
 
   for (;;) {
     const choices = await autocompleteMultiselect({
@@ -192,7 +194,7 @@ export async function chooseProjects(
     if (!projects.length) {
       const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
       if (isCancel(approve) || !approve) return;
-      return { projects, history: false, background: false };
+      return { projects, history: false, background: false, sessionDetails: options.sessionDetails ?? detailsDefault };
     }
     if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
       log.info("Projects already approved for older sessions keep that approval.");
@@ -203,6 +205,11 @@ export async function chooseProjects(
     if (isCancel(history)) return;
     const background: Awaited<ReturnType<typeof confirm>> = options.background ?? await confirm({ message: "Keep syncing when this terminal closes?", initialValue: backgroundDefault });
     if (isCancel(background)) return;
+    const sessionDetails: Awaited<ReturnType<typeof confirm>> = options.sessionDetails ?? await confirm({
+      message: "Also upload tool input and output, file diffs, and setup from Codex and Claude Code?",
+      initialValue: detailsDefault,
+    });
+    if (isCancel(sessionDetails)) return;
 
     if (options.onboarding) {
       const checkoutLabel = projects.length === 1 ? "folder" : "folders";
@@ -217,11 +224,12 @@ export async function chooseProjects(
     const destination = options.onDiscovered ? "the workspace open in your browser"
       : options.workspace ? `workspace ${options.workspace}` : "your private workspace";
     log.info(`Tideline uploads conversation text and available metadata from these folders to ${destination}. Common credentials in messages are redacted.`);
+    if (sessionDetails) log.info("Session details can include source code and command output. Workspace members can read them.");
 
     if (!options.onboarding) {
       const approved = await confirm({ message: "Approve this selection?", initialValue: false });
       if (isCancel(approved) || !approved) return;
-      return { projects, history, background };
+      return { projects, history, background, sessionDetails };
     }
 
     const action = await select({
@@ -234,10 +242,11 @@ export async function chooseProjects(
       ],
     });
     if (isCancel(action) || action === "cancel") return;
-    if (action === "confirm") return { projects, history, background };
+    if (action === "confirm") return { projects, history, background, sessionDetails };
     initialValues = choices;
     historyDefault = history;
     backgroundDefault = background;
+    detailsDefault = sessionDetails;
   }
 }
 
