@@ -34,15 +34,15 @@ export function fetchTidelineApi(path: string, options: RequestInit = {}) {
 }
 
 export async function fetchWorkspaceResource(path: string, { allowNotFound, ...options }: RequestInit & { allowNotFound?: boolean } = {}) {
-  const { getToken } = await auth.protect();
+  const { getToken, redirectToSignIn } = await auth();
   const token = await getToken();
-  if (!token) redirect("/sign-in");
+  if (!token) return redirectToSignIn();
 
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${token}`);
   const response = await fetchTidelineApi(`/workspaces/${path}`, { ...options, headers });
 
-  if (response?.status === 401) redirect("/sign-in");
+  if (response?.status === 401) return redirectToSignIn();
   if (response?.status === 410) redirect("/account/delete");
   if (response?.status === 404 && !allowNotFound) notFound();
   return response;

@@ -88,12 +88,12 @@ function postOAuthForm(url: URL, body: URLSearchParams, timeout: number) {
   }).catch(() => null);
 }
 
-function openBrowser(url: URL) {
+export function openBrowser(url: URL) {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
   const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url.href] : [url.href];
   const browser = spawn(command, args, { detached: true, stdio: "ignore" });
   browser.once("error", () => {
-    process.stderr.write("Could not open your browser. Use the approval link shown above.\n");
+    process.stderr.write("Could not open your browser. Use the link shown above.\n");
   });
   browser.unref();
 }

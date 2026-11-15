@@ -112,8 +112,8 @@ export async function chooseProjects(
   roots: AgentRoots,
   previous: ApprovedProject[],
   options: {
-    workspace?: string; history?: boolean; background?: boolean; allowEmpty?: boolean; onboarding?: boolean;
-    fullTranscripts?: boolean;
+    workspace?: string; history?: boolean; background?: boolean; hooks?: boolean; allowEmpty?: boolean; onboarding?: boolean;
+    fullTranscripts?: boolean; previousFullTranscripts?: boolean;
     sessionDetails?: boolean; previousSessionDetails?: boolean;
     subagentTranscripts?: boolean; previousSubagentTranscripts?: boolean;
     onDiscovered?: (repositoriesFound: number, localSessionsFound: number) => Promise<void>;
@@ -182,10 +182,36 @@ export async function chooseProjects(
     };
   });
   let initialValues = items.filter(({ active }) => active).map(({ value }) => value);
-  let historyDefault = false;
-  let backgroundDefault = true;
-  let detailsDefault = options.previousSessionDetails ?? false;
-  let subagentsDefault = options.previousSubagentTranscripts ?? false;
+  let settings = {
+    history: options.history ?? Boolean(options.onboarding),
+    background: options.background ?? true,
+    hooks: options.hooks ?? Boolean(options.onboarding),
+    sessionDetails: options.sessionDetails ?? options.previousSessionDetails ?? false,
+    subagentTranscripts: options.subagentTranscripts ?? options.previousSubagentTranscripts ?? false,
+    fullTranscripts: options.fullTranscripts ?? options.previousFullTranscripts ?? false,
+  };
+
+  async function customize() {
+    const history = options.history ?? await confirm({ message: "Import older sessions?", initialValue: settings.history });
+    if (isCancel(history)) return;
+    const background = options.background ?? await confirm({ message: "Keep syncing when this terminal closes?", initialValue: settings.background });
+    if (isCancel(background)) return;
+    const hooks = options.onboarding && options.hooks === undefined
+      ? await confirm({ message: "Install agent hooks for faster sync?", initialValue: settings.hooks }) : settings.hooks;
+    if (isCancel(hooks)) return;
+    const sessionDetails = options.sessionDetails ?? await confirm({
+      message: "Include recorded tool input and output, file diffs, and setup?", initialValue: settings.sessionDetails,
+    });
+    if (isCancel(sessionDetails)) return;
+    const subagentTranscripts = sessionDetails && (options.subagentTranscripts ?? await confirm({
+      message: "Include redacted subagent conversations?", initialValue: settings.subagentTranscripts,
+    }));
+    if (isCancel(subagentTranscripts)) return;
+    const fullTranscripts = options.onboarding && options.fullTranscripts === undefined
+      ? await confirm({ message: "Include redacted raw transcripts and recorded images?", initialValue: settings.fullTranscripts }) : settings.fullTranscripts;
+    if (isCancel(fullTranscripts)) return;
+    return { history, background, hooks, sessionDetails, subagentTranscripts, fullTranscripts };
+  }
 
   for (;;) {
     const choices = await autocompleteMultiselect({
@@ -202,67 +228,51 @@ export async function chooseProjects(
     if (!projects.length) {
       const approve = await confirm({ message: "Pause uploads for every repository on this computer?", initialValue: false });
       if (isCancel(approve) || !approve) return;
-      return { projects, history: false, background: false, sessionDetails: options.sessionDetails ?? detailsDefault,
-        subagentTranscripts: options.subagentTranscripts ?? subagentsDefault };
+      return { ...settings, projects, history: false, background: false, hooks: false };
     }
     if (projects.some((project) => previous.some((prior) => prior.since === historyStart && sameCheckout(prior, project)))) {
       log.info("Projects already approved for older sessions keep that approval.");
-    } else if (options.onboarding && options.history === undefined) {
-      log.info("You can import existing sessions or start with new sessions only.");
     }
-    const history: Awaited<ReturnType<typeof confirm>> = options.history ?? await confirm({ message: "Import older sessions from these repositories?", initialValue: historyDefault });
-    if (isCancel(history)) return;
-    const background: Awaited<ReturnType<typeof confirm>> = options.background ?? await confirm({ message: "Keep syncing when this terminal closes?", initialValue: backgroundDefault });
-    if (isCancel(background)) return;
-    const sessionDetails: Awaited<ReturnType<typeof confirm>> = options.sessionDetails ?? await confirm({
-      message: "Also upload tool input and output, file diffs, and setup from Codex and Claude Code?",
-      initialValue: detailsDefault,
-    });
-    if (isCancel(sessionDetails)) return;
-    const subagentTranscripts = sessionDetails && (options.subagentTranscripts ?? await confirm({
-      message: "Also upload redacted conversations from Codex and Claude Code subagents?", initialValue: subagentsDefault,
-    }));
-    if (isCancel(subagentTranscripts)) return;
-
-    if (options.onboarding) {
-      const checkoutLabel = projects.length === 1 ? "folder" : "folders";
-      const added = projects.filter((checkout) => !wasActive(checkout)).length;
-      const kept = projects.length - added;
-      const paused = previous.length - kept;
-      log.info(`Review ${projects.length} ${checkoutLabel} · ${added} new · ${kept} continuing · ${paused} paused`);
-      const selectedSessions = choices.reduce((total, index) => total + items[index].count, 0);
-      log.info(`${selectedSessions} ${selectedSessions === 1 ? "local session" : "local sessions"} found in your selection. ${history ? "Include older sessions." : "Start with new sessions in newly selected folders."}`);
-    }
-    log.info(projects.map(({ directory }) => terminalText(directory)).join("\n"));
-    const destination = options.onDiscovered ? "the workspace open in your browser"
-      : options.workspace ? `workspace ${options.workspace}` : "your private workspace";
-    log.info(`Tideline uploads conversation text and available metadata from these folders to ${destination}. Common credentials in messages are redacted.`);
-    if (options.fullTranscripts) log.info("Full transcripts add redacted source records and recorded images from Codex and Claude Code.");
-    if (sessionDetails) log.info("Session details can include source code and command output. Workspace members can read them.");
-    if (subagentTranscripts) log.info("Workspace members can read captured subagent conversations.");
-
     if (!options.onboarding) {
-      const approved = await confirm({ message: "Approve this selection?", initialValue: false });
-      if (isCancel(approved) || !approved) return;
-      return { projects, history, background, sessionDetails, subagentTranscripts };
+      const chosen = await customize();
+      if (!chosen) return;
+      settings = chosen;
     }
+    const destination = options.onDiscovered ? "the workspace open in your browser"
+      : options.workspace ? `workspace ${options.workspace}` : "your personal workspace";
+    const selectedSessions = choices.reduce((total, index) => total + items[index].count, 0);
+    for (;;) {
+      log.info(projects.map(({ directory }) => terminalText(directory)).join("\n"));
+      log.info(`Tideline sends redacted conversation text and available metadata to ${destination}.`);
+      if (settings.fullTranscripts) log.info("Includes redacted raw transcripts and recorded images.");
+      if (settings.sessionDetails) log.info("Includes recorded tool text, diffs, and setup. Tools can expose source code and command output to workspace members.");
+      if (settings.sessionDetails && settings.subagentTranscripts) log.info("Includes redacted subagent conversations.");
+      if (!options.onboarding) {
+        const approved = await confirm({ message: "Approve this selection?", initialValue: false });
+        if (isCancel(approved) || !approved) return;
+        return { ...settings, projects };
+      }
 
-    const action = await select({
-      message: "Review repository selection",
-      initialValue: "change",
-      options: [
-        { value: "confirm", label: "Confirm selection and continue" },
-        { value: "change", label: "Change selection" },
-        { value: "cancel", label: "Cancel setup" },
-      ],
-    });
-    if (isCancel(action) || action === "cancel") return;
-    if (action === "confirm") return { projects, history, background, sessionDetails, subagentTranscripts };
+      log.info([
+        settings.history ? `Import ${selectedSessions} saved ${selectedSessions === 1 ? "session" : "sessions"}` : "Start with new sessions",
+        settings.background ? "Background sync on" : "Background sync off",
+        settings.hooks ? "Install Codex and Claude Code hooks" : "Leave agent hooks as configured",
+      ].join(" · "));
+      const action = await select({
+        message: "Review repository selection",
+        options: [
+          { value: "confirm", label: "Confirm and continue" },
+          { value: "settings", label: "Customize setup" },
+          { value: "change", label: "Change repositories" },
+          { value: "cancel", label: "Cancel setup" },
+        ],
+      });
+      if (isCancel(action) || action === "cancel") return;
+      if (action === "confirm") return { ...settings, projects };
+      if (action === "change") break;
+      settings = await customize() ?? settings;
+    }
     initialValues = choices;
-    historyDefault = history;
-    backgroundDefault = background;
-    detailsDefault = sessionDetails;
-    subagentsDefault = subagentTranscripts;
   }
 }
 

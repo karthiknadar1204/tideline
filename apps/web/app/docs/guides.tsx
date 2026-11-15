@@ -10,13 +10,13 @@ function GetStarted() {
         <h2 id="prepare-cli">Install the CLI</h2>
         <p>Use macOS or Linux with Node.js 22.13 or later within Node 22, or Node 24. Run this command in your terminal to install Tideline and open the repository picker.</p>
         <CopyTerminalCommand command={cliInstallCommand()} label="Copy install command" />
-        <p>To connect to a specific workspace, open its <strong>Dashboard</strong> or <strong>Settings</strong> → <strong>Uploads</strong> and select <strong>Get setup command</strong>. The command links your terminal to that browser page, where you can follow discovery, approval, and the start of sync.</p>
+        <p>To connect to a specific workspace, open its <strong>Dashboard</strong> or <strong>Sync setup</strong> and select <strong>Copy setup command</strong>. Paste the command into your terminal. You can follow setup progress in the browser.</p>
       </section>
       <section aria-labelledby="first-session">
         <h2 id="first-session">Sync your first session</h2>
         <ol>
           <li>Type to filter the repository picker. Use the arrow keys to move, <kbd>Tab</kbd> to select, and <kbd>Enter</kbd> to continue.</li>
-          <li>Choose whether to import older conversations and keep sync running after you close the terminal. Older sessions are off by default. Review the repositories and confirm.</li>
+          <li>Review your selection and confirm. The suggested setup imports saved sessions and starts background sync with agent hooks. Select <strong>Customize setup</strong> to change these options or include more session details.</li>
           <li>Approve the connection in the browser with the account that opened workspace setup. The setup page switches to your dashboard once the first session is ready.</li>
           <li>If you skipped older sessions, start a new agent session in a selected repository. The dashboard lists the session after processing.</li>
         </ol>

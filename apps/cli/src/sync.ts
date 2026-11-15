@@ -15,7 +15,7 @@ import {
 import type { SessionImportRequest } from "@tideline/contracts";
 import { findSessionCommits } from "./commit-links";
 import { createGitHubActivitySync, readGitHubRepository } from "./github-activity";
-import { approveInBrowser, postToTideline, readJson, tidelineApiOrigin, tidelineWebOrigin } from "./login";
+import { approveInBrowser, openBrowser, postToTideline, readJson, tidelineApiOrigin, tidelineWebOrigin } from "./login";
 import { readRepository } from "./repository";
 import { createRepositoryInstructionSync } from "./repository-instructions";
 import { redactConversationText } from "./session-safety";
@@ -148,11 +148,13 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   }
   const selection = options.project?.length ? {
     projects: await explicitProjects(options.project), history: options.history ?? false, background: options.background ?? false,
+    hooks: options.hooks ?? false,
     sessionDetails: options.sessionDetails ?? previous?.sessionDetails ?? false,
     subagentTranscripts: options.subagentTranscripts ?? previous?.subagentTranscripts ?? false,
+    fullTranscripts: options.fullTranscripts ?? previous?.fullTranscripts ?? false,
   } : await chooseProjects(roots, previous?.projects ?? [], {
     ...options,
-    fullTranscripts: options.fullTranscripts ?? previous?.fullTranscripts,
+    previousFullTranscripts: previous?.fullTranscripts,
     previousSessionDetails: previous?.sessionDetails,
     previousSubagentTranscripts: previous?.subagentTranscripts,
     received: existingSetup?.received,
@@ -166,7 +168,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     console.info("Setup canceled.");
     return;
   }
-  const fullTranscripts = (options.fullTranscripts ?? previous?.fullTranscripts) || undefined;
+  const fullTranscripts = selection.fullTranscripts || undefined;
   const repositoryInstructions = (options.repositoryInstructions ?? previous?.repositoryInstructions) || undefined;
   const repositoryContext = (options.repositoryContext ?? previous?.repositoryContext) || undefined;
   if (options.subagentTranscripts && !selection.sessionDetails) {
@@ -210,11 +212,6 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
         if (token) await createSessionInventory({ ...previous, projects })(token, AbortSignal.timeout(4_000));
       }
     } else {
-      const sources = [sessionSourceLabel.codex, sessionSourceLabel["claude-code"], sessionSourceLabel.cursor];
-      if (roots.openCodeRoot) sources.push(sessionSourceLabel.opencode);
-      const destination = options.workspace ? `workspace ${options.workspace}` : "your personal workspace";
-      console.info(`Syncing ${projects.length} ${projects.length === 1 ? "project" : "projects"} from ${sources.join(", ")} to ${destination} at ${apiOrigin}.`);
-      if (selection.history) console.info("This approval includes older sessions.");
       if (useLocalCredential) console.info("Tideline will store the sync credential in an owner-only file on this computer.");
       if (options.onboarding && !connection) console.info("Sign in and approve this collector in your browser.");
       workspaceId = await enrollSync(storage, options, {
@@ -234,7 +231,7 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     return;
   }
   if (selection.sessionDetails) console.info("Session details are enabled for Codex and Claude Code.");
-  if (options.hooks) {
+  if (selection.hooks) {
     const { configureNativeHooks } = await import("./native-hooks");
     await configureNativeHooks("install").catch((error: unknown) => {
       console.warn(`Hooks could not be installed. Sync can still run. ${error instanceof Error ? error.message : "Run tideline hooks install to retry."}`);
@@ -252,8 +249,9 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   }
 
   if (webOrigin) {
-    console.info(`Open your dashboard at ${new URL(`/workspace/${workspaceId}/dashboard`, webOrigin).href}`);
-    console.info("Sessions appear in the dashboard after they finish syncing.");
+    const sessions = new URL(`/workspace/${workspaceId}`, webOrigin);
+    console.info(`Open your sessions at ${sessions.href}`);
+    if (!connection && options.browser) openBrowser(sessions);
     if (!selection.history) console.info("Start a new agent session in a selected repository to see it there.");
   }
 }

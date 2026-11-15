@@ -202,7 +202,7 @@ export async function configureNativeHooks(action: "install" | "remove" | "statu
   }
   if (action === "install" && selected.includes("codex")) console.info("Review the Tideline hooks with /hooks in Codex before they run.");
   if (action === "install" && selected.includes("claude-code")) console.info("Restart Claude Code if your existing session has not loaded the new hooks.");
-  if (action === "install") console.info("Hooks wake Tideline while the collector is running. Start it with tideline sync start.");
+  if (action === "install") console.info("Hooks wake Tideline while background sync is running.");
 }
 
 export async function runNativeHook(source: unknown, event: string) {

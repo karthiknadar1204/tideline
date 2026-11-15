@@ -117,15 +117,18 @@ const runSetup = async (options: Parameters<typeof import("./sync").setupSync>[0
   await setupSync(options);
 };
 
-program.action(({ code }: { code?: string }) => runSetup({ browser: true, ...(code && { code, onboarding: true }) }));
+program.action(({ code }: { code?: string }) => runSetup({ browser: true, code, onboarding: true }));
 
 function setupOptions(command: Command) {
   return command
     .option("--workspace <id>", "Destination workspace ID for a new collector (defaults to your selected workspace)")
     .option("--project <directory...>", "Project directories to sync without the picker")
     .option("--history", "Include older sessions in the selected projects")
+    .option("--no-history", "Start with new sessions in newly selected projects")
     .option("--background", "Start the collector in the background")
+    .option("--no-background", "Set up sync without starting the background collector")
     .option("--hooks", "Install native Codex and Claude Code hooks after sync approval")
+    .option("--no-hooks", "Keep existing agent hook settings")
     .option("--conversations", "Approve uploading conversations and available metadata from --project")
     .option("--session-details", "Also upload recorded tool text, file changes, and setup from Codex and Claude Code")
     .option("--no-session-details", "Stop including session details in future uploads")

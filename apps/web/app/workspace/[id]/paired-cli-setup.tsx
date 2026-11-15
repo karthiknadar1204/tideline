@@ -71,7 +71,7 @@ export function PairedCliSetup({ workspaceId, fallbackCommand }: { workspaceId: 
   const storageKey = user ? `tideline:setup:${user.id}:${workspaceId}` : null;
   const endpoint = `/workspace/${encodeURIComponent(workspaceId)}/connect-state`;
   const [setup, setSetup] = useState<Setup>();
-  const [request, setRequest] = useState<{ key: string; status: "pending" | "failed" | "expired" }>();
+  const [request, setRequest] = useState<{ key: string; status: "pending" | "failed" | "expired" | "copied" }>();
   const connection = setup?.key === storageKey ? setup.connection : undefined;
   const requestState = request?.key === storageKey ? request.status : undefined;
 
@@ -137,18 +137,26 @@ export function PairedCliSetup({ workspaceId, fallbackCommand }: { workspaceId: 
   async function generateCommand() {
     if (!storageKey || requestState === "pending") return;
     setRequest({ key: storageKey, status: "pending" });
-    try {
-      const response = await fetch(endpoint, { method: "POST", cache: "no-store" });
-      const next = cliSetupBrowserConnection.safeParse(response.ok ? await response.json() : null);
-      if (next.success && next.data.command) {
-        setSetup({ key: storageKey, connection: next.data });
-        setRequest(undefined);
-        return;
-      }
-    } catch {
-      // The fallback command remains available.
+    const command = fetch(endpoint, { method: "POST", cache: "no-store" }).then(async (response) => {
+      const parsed = cliSetupBrowserConnection.safeParse(response.ok ? await response.json() : null);
+      if (!parsed.success || !parsed.data.command) return;
+      return { connection: parsed.data, text: parsed.data.command };
+    }).catch(() => undefined);
+    let copied: Promise<boolean> | undefined;
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+      const text = command.then((value) => {
+        if (!value) throw new Error("Setup command unavailable");
+        return new Blob([value.text], { type: "text/plain" });
+      });
+      copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).then(() => true, () => false);
     }
-    setRequest({ key: storageKey, status: "failed" });
+    const next = await command;
+    if (!next) {
+      setRequest({ key: storageKey, status: "failed" });
+      return;
+    }
+    setSetup({ key: storageKey, connection: next.connection });
+    setRequest(await copied ? { key: storageKey, status: "copied" } : undefined);
   }
 
   return (
@@ -161,10 +169,11 @@ export function PairedCliSetup({ workspaceId, fallbackCommand }: { workspaceId: 
       )}
       {requestState === "expired" && <p role="status" className="text-sm">This setup code expired. Get a fresh command to continue.</p>}
       {requestState === "failed" && <p role="alert" className="text-sm">Couldn't make a paired command. Try again or use the direct command below.</p>}
-      {(!connection || finished || connection.progress.phase === "waiting") && (
+      {requestState === "copied" && connection?.progress.phase === "waiting" && <p role="status" className="text-sm">Command copied. Paste it into your terminal.</p>}
+      {(!connection || finished || connection.progress.phase === "waiting" || connection.progress.phase === "choosing") && (
         <button type="button" disabled={!storageKey || requestState === "pending"} onClick={generateCommand}
           className={`min-h-9 rounded-md px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-65 ${connection ? "border border-[var(--workspace-border)] hover:bg-[var(--workspace-panel)]" : "bg-[var(--workspace-button)] text-[var(--workspace-button-text)] hover:opacity-90"}`}>
-          {requestState === "pending" ? "Creating command…" : connection || requestState === "expired" ? "Get a fresh command" : "Get setup command"}
+          {requestState === "pending" ? "Creating command…" : connection || requestState === "expired" ? "Get a fresh command" : "Copy setup command"}
         </button>
       )}
       {(!connection || finished) && (

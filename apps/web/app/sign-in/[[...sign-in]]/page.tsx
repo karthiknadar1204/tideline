@@ -1,12 +1,12 @@
-import { SignIn } from "@clerk/nextjs";
 import { Suspense } from "react";
-import { AuthFrame, tidelineAuthAppearance } from "../../auth-frame";
+import { AuthFrame } from "../../auth-frame";
+import { WorkspaceSignIn } from "../workspace-sign-in";
 
 export default function SignInPage() {
   return (
     <AuthFrame>
       <Suspense>
-        <SignIn appearance={tidelineAuthAppearance} fallbackRedirectUrl="/workspace" />
+        <WorkspaceSignIn origin={new URL(process.env.TIDELINE_WEB_ORIGIN ?? "http://localhost:3000").origin} />
       </Suspense>
     </AuthFrame>
   );

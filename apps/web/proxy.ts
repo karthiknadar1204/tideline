@@ -27,7 +27,7 @@ export default clerkMiddleware(async (auth, request) => {
   if (id) return;
   destination.pathname = `/workspace/${address.id}${suffix ?? ""}`;
   return NextResponse.rewrite(destination);
-});
+}, { signInUrl: "/sign-in", signUpUrl: "/sign-up" });
 
 export const config = {
   matcher: [
