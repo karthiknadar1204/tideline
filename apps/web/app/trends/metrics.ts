@@ -19,3 +19,19 @@ export function formatDuration(seconds: number) {
 export function reportNumber(value: number | null, format: (value: number) => string) {
   return value === null ? "Unavailable" : format(value);
 }
+
+export type Scale = "linear" | "log";
+
+export function plotScale(values: number[], scale: Scale) {
+  const upper = Math.max(...values) || 1;
+  const smallest = Math.min(...values);
+  const lower = scale === "log" ? (smallest === upper ? upper / 10 : smallest) : 0;
+  const transform = scale === "log" ? Math.log : (value: number) => value;
+  const restore = scale === "log" ? Math.exp : (value: number) => value;
+  const start = transform(lower);
+  const span = transform(upper) - start;
+  return {
+    position: (value: number) => 100 * (transform(value) - start) / span,
+    ticks: [lower, ...[0.25, 0.5, 0.75].map((fraction) => restore(start + fraction * span)), upper],
+  };
+}

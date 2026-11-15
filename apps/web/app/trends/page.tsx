@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { publicAgentRuns, publicModelUsage, publicTraceSample, readBenchmarkBoards, traceLabSource } from "../../lib/public-trends";
+import { publicAgentRuns, publicLanguageUsage, publicModelUsage, publicTraceSample, readBenchmarkBoards, traceLabSource } from "../../lib/public-trends";
 import landing from "../landing.module.css";
 import { AgentRuns } from "./agent-runs";
 import { BenchmarkExplorer } from "./benchmark-explorer";
@@ -97,9 +97,8 @@ export default async function TrendsPage({ searchParams }: PageProps<"/trends">)
         {active === "dev-usage" && (
           <section className={styles.section} aria-labelledby="usage-title">
             <div className={styles.sectionHeader}><div><h2 id="usage-title">Developer usage</h2>
-              <p>Compare observed friction across models in public coding-agent traces.</p></div></div>
-            <TraceLabCitation />
-            <DeveloperUsage models={publicModelUsage} />
+              <p>Compare tool errors and language patterns across models in public coding-agent traces.</p></div></div>
+            <DeveloperUsage models={publicModelUsage} language={publicLanguageUsage} traceCitation={<TraceLabCitation />} />
             <Survey />
           </section>
         )}

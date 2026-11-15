@@ -21,6 +21,13 @@
   background: var(--panel); color: var(--ink); font: inherit; font-size: 0.9rem; font-weight: 450;
 }
 .form :is(select,input):disabled { opacity: 0.55; }
+.modelSelection { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: -0.35rem 0 1rem; padding: 0; list-style: none; }
+.modelSelection button {
+  padding: 0.32rem 0.55rem; border: 1px solid var(--line); border-radius: 0.4rem;
+  background: var(--panel); color: var(--ink); font-size: 0.76rem; cursor: pointer;
+}
+.modelSelection button:hover { border-color: var(--accent); }
+.modelSelection button span, .modelSelection li:last-child button { color: var(--muted); }
 .content :is(button,select,input,summary):focus-visible, .tableRegion:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel { overflow: hidden; border: 1px solid var(--line); border-radius: 0.55rem; background: var(--panel); }
 .panelHeader { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem; align-items: center; padding: 0.85rem 1rem; }
@@ -49,6 +56,12 @@
 }
 .marker[data-frontier="true"] { background: var(--accent); opacity: 1; }
 .marker:is(:hover,[aria-pressed="true"]) { z-index: 1; outline: 2px solid var(--accent); outline-offset: 2px; opacity: 1; }
+.pointLabel {
+  position: absolute; left: calc(100% + 0.4rem); top: 50%; max-width: clamp(4.5rem, 15vw, 10rem);
+  overflow: hidden; transform: translateY(-50%); text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ink); font-size: 0.69rem; font-weight: 600; pointer-events: none; text-shadow: 0 0 3px var(--panel);
+}
+.pointLabel[data-left="true"] { right: calc(100% + 0.4rem); left: auto; }
 .chartInspector { display: flex; flex-wrap: wrap; align-items: end; gap: 0.65rem 1rem; padding: 0.8rem 1rem 1rem; border-top: 1px solid var(--line); }
 .chartInspector label { flex: 1 1 16rem; }
 .chartInspector p { padding-block: 0.55rem; color: var(--ink); font-size: 0.83rem; }
@@ -86,6 +99,7 @@
   .chart { padding-right: 1.35rem; padding-left: 2.55rem; }
   .chartYLabel { margin-left: -1.7rem; }
   .chartTick:nth-last-of-type(2), .chartTick:nth-last-of-type(4) { display: none; }
+  .marker[aria-pressed="false"] .pointLabel { display: none; }
   .chartInspector p { padding-block: 0; }
   .tableRegion :is(th,td) { padding-inline: 0.55rem; }
 }

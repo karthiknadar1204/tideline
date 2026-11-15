@@ -1,4 +1,5 @@
 import { unstable_cache } from "next/cache";
+import chain from "./public-trends-data/chain-2026-11.json";
 import terminalBench from "./public-trends-data/terminal-bench-2-1.json";
 import traceLab from "./public-trends-data/tracelab-v0.0.2.json";
 
@@ -25,6 +26,7 @@ export const traceLabSource = {
 };
 export const publicAgentRuns = traceLab.runs;
 export const publicModelUsage = traceLab.models;
+export const publicLanguageUsage = chain;
 export const publicTraceSample = traceLab.sample;
 
 function object(value: unknown): value is Record<string, unknown> {

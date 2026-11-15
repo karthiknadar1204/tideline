@@ -1,0 +1,249 @@
+{
+  "minimum": {
+    "sessions": 5,
+    "prompts": 30,
+    "replies": 30
+  },
+  "models": [
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-opus-4-6",
+      "sessions": 228,
+      "prompts": 938,
+      "replies": 10694,
+      "visibleOutputTokens": 4775529,
+      "promptsWithSwearing": 3,
+      "repliesWithApology": 5
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "claude-4.5-sonnet-thinking",
+      "sessions": 137,
+      "prompts": 649,
+      "replies": 650,
+      "visibleOutputTokens": 2715062,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-sonnet-4-6",
+      "sessions": 131,
+      "prompts": 469,
+      "replies": 4149,
+      "visibleOutputTokens": 1984552,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "gpt-5",
+      "sessions": 118,
+      "prompts": 437,
+      "replies": 437,
+      "visibleOutputTokens": 1176110,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/claude-sonnet-4",
+      "sessions": 68,
+      "prompts": 434,
+      "replies": 434,
+      "visibleOutputTokens": 213038,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-opus-4-7",
+      "sessions": 186,
+      "prompts": 348,
+      "replies": 4342,
+      "visibleOutputTokens": 2403634,
+      "promptsWithSwearing": 1,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/claude-sonnet-4.5",
+      "sessions": 51,
+      "prompts": 343,
+      "replies": 343,
+      "visibleOutputTokens": 176739,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-opus-4-5-20251101",
+      "sessions": 87,
+      "prompts": 325,
+      "replies": 5600,
+      "visibleOutputTokens": 1874107,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-opus-4-8",
+      "sessions": 72,
+      "prompts": 261,
+      "replies": 3952,
+      "visibleOutputTokens": 1497124,
+      "promptsWithSwearing": 1,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/gpt-5-mini",
+      "sessions": 18,
+      "prompts": 196,
+      "replies": 196,
+      "visibleOutputTokens": 159377,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/claude-haiku-4.5",
+      "sessions": 9,
+      "prompts": 173,
+      "replies": 173,
+      "visibleOutputTokens": 55201,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/gpt-5",
+      "sessions": 52,
+      "prompts": 171,
+      "replies": 171,
+      "visibleOutputTokens": 132972,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 6
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/gpt-4.1",
+      "sessions": 18,
+      "prompts": 165,
+      "replies": 165,
+      "visibleOutputTokens": 36410,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-sonnet-5",
+      "sessions": 20,
+      "prompts": 161,
+      "replies": 787,
+      "visibleOutputTokens": 301493,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-opus-5",
+      "sessions": 32,
+      "prompts": 126,
+      "replies": 2180,
+      "visibleOutputTokens": 933885,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "gpt-5-high",
+      "sessions": 27,
+      "prompts": 116,
+      "replies": 116,
+      "visibleOutputTokens": 628571,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "<synthetic>",
+      "sessions": 70,
+      "prompts": 109,
+      "replies": 110,
+      "visibleOutputTokens": 2236,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "copilot/gpt-5-codex",
+      "sessions": 11,
+      "prompts": 75,
+      "replies": 75,
+      "visibleOutputTokens": 21745,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-fable-5",
+      "sessions": 14,
+      "prompts": 73,
+      "replies": 907,
+      "visibleOutputTokens": 338273,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "claude-4-sonnet",
+      "sessions": 9,
+      "prompts": 68,
+      "replies": 68,
+      "visibleOutputTokens": 109353,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 1
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-sonnet-4-5-20250929",
+      "sessions": 10,
+      "prompts": 55,
+      "replies": 354,
+      "visibleOutputTokens": 100244,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "grok-code-fast-1",
+      "sessions": 12,
+      "prompts": 54,
+      "replies": 54,
+      "visibleOutputTokens": 190965,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Cursor / Copilot",
+      "model": "claude-4-sonnet-thinking",
+      "sessions": 6,
+      "prompts": 48,
+      "replies": 48,
+      "visibleOutputTokens": 215883,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    },
+    {
+      "cohort": "Claude Code 2",
+      "model": "claude-haiku-4-5-20251001",
+      "sessions": 44,
+      "prompts": 48,
+      "replies": 151,
+      "visibleOutputTokens": 34815,
+      "promptsWithSwearing": 0,
+      "repliesWithApology": 0
+    }
+  ]
+}
