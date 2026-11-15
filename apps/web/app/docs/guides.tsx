@@ -60,10 +60,12 @@ function CliGuide() {
           ["sync start / sync stop", "Start or stop background sync."],
           ["sync autostart enable | status | disable", "Manage automatic startup on macOS or Linux with systemd. Use the installed CLI."],
           ["sync status", "Show selected repositories and upload status."],
+          ["sync workspaces", "Show each workspace and the local repositories routed to it."],
           ["sync retry / upload --retry", "Retry queued or failed uploads from approved repositories."],
-          ["sync revoke", "End the collector’s authorization. Run onboard again to connect it to a different workspace."],
+          ["sync revoke", "End the collector’s authorization. Run onboard again to restore the connection."],
         ]} />
         <p><code>connect</code>, <code>enable</code>, <code>disable</code>, and <code>upload</code> also open the repository picker. To select folders in a script, pass <code>--project /path/to/repository --conversations</code>. Add <code>--history</code> for older sessions or <code>--background</code> to start sync immediately.</p>
+        <p>To send different repositories to different workspaces, run <code>tideline sync setup --workspace &lt;id&gt;</code> for each destination and select its repositories. Add the same <code>--workspace &lt;id&gt;</code> to <code>sync status</code>, <code>sync start</code>, or other sync commands to control that collector.</p>
         <p>To include recorded files, setup, and tool details for Codex and Claude Code, run <code>tideline sync setup --session-details</code>. Add <code>--history</code> if you also want to collect these details from older sessions in the repositories you select.</p>
         <p>With session details enabled, add <code>--subagent-transcripts</code> to collect bounded excerpts of linked Codex and Claude Code child conversations up to four levels deep. You can read them in the parent session’s <strong>Subagents</strong> tab.</p>
         <p>Add <code>--hooks</code> to install Codex and Claude Code hooks that wake a running collector. Review them with <code>tideline hooks status</code>. If Codex prompts for trust, review the new Tideline commands in Codex’s <code>/hooks</code> menu. Run <code>tideline hooks remove</code> to remove them.</p>

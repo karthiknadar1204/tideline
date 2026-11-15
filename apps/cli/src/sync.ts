@@ -31,6 +31,7 @@ import { chooseProjects, createApprovedScope, explicitProjects, historyStart, sa
 import { configuredAgentRoots, createCodexSubagentIndex, databaseSources, databaseVersion, fileSources, isInaccessible, isWithin, readPhysicalDirectory, sessionFiles } from "./sync-sources";
 import {
   backgroundStartupTimeout,
+  collectorWorkspace,
   deleteSyncCredential,
   loadSyncCredential,
   openSyncStorage,
@@ -40,6 +41,7 @@ import {
 } from "./sync-storage";
 import type { SyncConfig } from "./sync-storage";
 import { watchCollectorWake } from "./sync-wake";
+import { readLocalCollectors, requireExclusiveProjects, withCollectorSetupLock, withSelectedCollector } from "./sync-workspaces";
 
 type SetupOptions = {
   workspace?: string;
@@ -106,12 +108,23 @@ async function enrollSync(storage: Storage, options: SetupOptions, settings: Omi
 }
 
 export async function setupSync(options: SetupOptions) {
-  if (options.code === undefined) return configureSync(options);
+  if (options.code === undefined) {
+    if (!options.workspace && !collectorWorkspace() && !(await readCurrentSetup())?.config) {
+      const { approvedWorkspaceDefault } = await import("./cli-account");
+      const workspace = await approvedWorkspaceDefault();
+      if (!workspace && (await readLocalCollectors()).length) {
+        throw new Error("Choose a destination with --workspace. Run tideline sync workspaces to see your local setups.");
+      }
+      options = { ...options, workspace };
+    }
+    const workspace = options.workspace?.toLowerCase();
+    return withSelectedCollector(workspace, () => configureSync({ ...options, workspace }), { setup: true });
+  }
   if (options.workspace !== undefined) throw new Error("Use the browser setup code by itself to select a workspace.");
   if (process.platform === "win32") throw new Error("Tideline automatic sync currently requires macOS or Linux.");
   const connection = await openSetupConnection(tidelineApiOrigin(), options.code);
   try {
-    await configureSync({ ...options, workspace: connection.workspaceId }, connection);
+    await withSelectedCollector(connection.workspaceId, () => configureSync({ ...options, workspace: connection.workspaceId }, connection), { setup: true });
   } catch (error) {
     await connection.update({ phase: "failed" });
     throw error;
@@ -127,10 +140,6 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   const previous = existingSetup?.config;
   const apiOrigin = tidelineApiOrigin();
   const webOrigin = options.onboarding ? tidelineWebOrigin() : undefined;
-  if (!options.workspace && !previous) {
-    const { approvedWorkspaceDefault } = await import("./cli-account");
-    options = { ...options, workspace: await approvedWorkspaceDefault() };
-  }
   if (previous && (previous.apiOrigin !== apiOrigin || (options.workspace && options.workspace !== previous.workspaceId) ||
       previous.revoked || Date.now() >= Date.parse(previous.expiresAt))) {
     throw new Error("Revoke this collector before changing its workspace or renewing its approval.");
@@ -189,34 +198,39 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
     }
     approvedToken = approval.accessToken;
   }
+  if (!previous && !approvedToken) {
+    await requireExclusiveProjects(selection.projects);
+    if (options.onboarding) console.info("Sign in and approve this collector in your browser.");
+    approvedToken = await approveInBrowser(options.browser);
+  }
 
-  if (previous) await stopBackgroundSync({ quiet: true });
-  const storage = await openSyncStorage({ lock: true, create: true });
-  let workspaceId: string;
-  try {
-    if (JSON.stringify(storage.config()) !== JSON.stringify(previous)) throw new Error("Sync setup changed. Run tideline sync setup again.");
-    const now = new Date().toISOString();
-    const retained = previous?.projects.filter((prior) => selection.projects.some((project) => sameCheckout(prior, project))) ?? [];
-    const retainedByPath = new Map(retained.map((project) => [project.directory, project]));
-    const projects = await Promise.all(selection.projects.map(async (project) => {
-      const retained = retainedByPath.get(project.directory);
-      const githubRepository = options.githubActivity === undefined ? retained?.githubRepository :
-        options.githubActivity && project.git ? await readGitHubRepository(project.directory) : undefined;
-      return { ...project, since: selection.history ? historyStart : retained?.since ?? now, githubRepository };
-    }));
-    if (previous) {
-      const removed = previous.projects.filter((prior) => !retained.includes(prior));
-      storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot, sessionDetails: selection.sessionDetails || undefined,
-        repositoryInstructions, repositoryContext, fullTranscripts, subagentTranscripts }, removed);
-      workspaceId = previous.workspaceId;
-      if (!projects.length) {
-        const token = await loadActiveSyncToken(storage, previous).catch(() => null);
-        if (token) await createSessionInventory({ ...previous, projects })(token, AbortSignal.timeout(4_000));
+  const workspaceId = await withCollectorSetupLock(async () => {
+    await requireExclusiveProjects(selection.projects);
+    if (previous) await stopBackgroundSync({ quiet: true });
+    const storage = await openSyncStorage({ lock: true, create: true });
+    try {
+      if (JSON.stringify(storage.config()) !== JSON.stringify(previous)) throw new Error("Sync setup changed. Run tideline sync setup again.");
+      const now = new Date().toISOString();
+      const retained = previous?.projects.filter((prior) => selection.projects.some((project) => sameCheckout(prior, project))) ?? [];
+      const retainedByPath = new Map(retained.map((project) => [project.directory, project]));
+      const projects = await Promise.all(selection.projects.map(async (project) => {
+        const retained = retainedByPath.get(project.directory);
+        const githubRepository = options.githubActivity === undefined ? retained?.githubRepository :
+          options.githubActivity && project.git ? await readGitHubRepository(project.directory) : undefined;
+        return { ...project, since: selection.history ? historyStart : retained?.since ?? now, githubRepository };
+      }));
+      if (previous) {
+        const removed = previous.projects.filter((prior) => !retained.includes(prior));
+        storage.updateProjects({ ...previous, projects, codexArchiveRoot: roots.codexArchiveRoot, sessionDetails: selection.sessionDetails || undefined,
+          repositoryInstructions, repositoryContext, fullTranscripts, subagentTranscripts }, removed);
+        if (!projects.length) {
+          const token = await loadActiveSyncToken(storage, previous).catch(() => null);
+          if (token) await createSessionInventory({ ...previous, projects })(token, AbortSignal.timeout(4_000));
+        }
+        return previous.workspaceId;
       }
-    } else {
       if (useLocalCredential) console.info("Tideline will store the sync credential in an owner-only file on this computer.");
-      if (options.onboarding && !connection) console.info("Sign in and approve this collector in your browser.");
-      workspaceId = await enrollSync(storage, options, {
+      return await enrollSync(storage, options, {
         apiOrigin, projects, startedAt: now, account: randomUUID(), credentialStore: credentialFile ? "file" : "keychain",
         codexRoot: roots.codexRoot, codexArchiveRoot: roots.codexArchiveRoot,
         claudeRoot: roots.claudeRoot, cursorRoot: roots.cursorRoot, openCodeRoot: roots.openCodeRoot,
@@ -224,10 +238,10 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
         subagentTranscripts,
         repositoryInstructions, repositoryContext, fullTranscripts,
       }, approvedToken);
+    } finally {
+      storage.close();
     }
-  } finally {
-    storage.close();
-  }
+  });
   if (!selection.projects.length) {
     console.info("Uploads are paused. Run tideline enable to choose repositories again.");
     return;
@@ -245,7 +259,10 @@ async function configureSync(options: SetupOptions, connection?: SetupConnection
   if (repositoryContext) console.info("Repository context is enabled for selected Git checkouts. Tideline sends redacted definitions, file metadata, and counts for tracked changes and recognized configurations.");
   if (options.githubActivity) console.info("GitHub activity is enabled for selected checkouts with a github.com origin. Run gh auth login if needed.");
   if (selection.background) await startBackgroundSync();
-  else console.info("Sync is set up. Run tideline sync start in the background or tideline sync run in this terminal.");
+  else {
+    const target = collectorWorkspace() ? ` --workspace ${workspaceId}` : "";
+    console.info(`Sync is set up. Run tideline sync start${target} in the background or tideline sync run${target} in this terminal.`);
+  }
   if (connection && !await connection.update({ phase: "ready", checkoutsSelected: selection.projects.length, background: selection.background })) {
     console.warn("Sync setup succeeded. The browser setup page could not be updated.");
   }

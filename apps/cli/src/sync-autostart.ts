@@ -7,14 +7,14 @@ import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { installedCli } from "./cli-update";
 import { tidelineApiOrigin } from "./login";
-import { openPrivateDatabase, openSyncStorage, syncDirectoryPath, SyncSetupMissingError } from "./sync-storage";
+import { collectorDirectoryPath, collectorWorkspace, openPrivateDatabase, openSyncStorage, syncDirectoryPath, SyncSetupMissingError } from "./sync-storage";
 
 const execute = promisify(execFile);
 const marker = "Managed by Tideline session sync";
 type ManagerResult = { ok: boolean; stdout: string; stderr: string };
 type RunManager = (program: string, arguments_: string[]) => Promise<ManagerResult>;
 
-type ServiceLocation = { platform: "darwin" | "linux"; home: string; linuxConfigHome?: string; scope: string; uid: number };
+type ServiceLocation = { platform: "darwin" | "linux"; home: string; linuxConfigHome?: string; scope: string; uid: number; syncHome?: string; workspace?: string };
 type ServiceState = { loaded: boolean; running: boolean; enabled: boolean };
 
 async function runManager(program: string, arguments_: string[]): Promise<ManagerResult> {
@@ -48,7 +48,7 @@ function safePath(path: string) {
   return isAbsolute(path) && !/[\x00-\x1f\x7f]/u.test(path);
 }
 
-export function createSyncAutostart({ platform, home, linuxConfigHome, scope, uid }: ServiceLocation,
+export function createSyncAutostart({ platform, home, linuxConfigHome, scope, uid, syncHome = scope, workspace }: ServiceLocation,
   run: RunManager = runManager) {
   const mac = platform === "darwin";
   const scopeId = createHash("sha256").update(scope).digest("hex").slice(0, 24);
@@ -64,7 +64,7 @@ export function createSyncAutostart({ platform, home, linuxConfigHome, scope, ui
   const control = (args: string[]) => run("/usr/bin/systemctl", ["--user", ...args]);
 
   function registration(launcher: string, node: string) {
-    if (![file, launcher, node, scope].every(safePath) || dirname(node).includes(":")) {
+    if (![file, launcher, node, scope, syncHome].every(safePath) || dirname(node).includes(":")) {
       throw new Error("Automatic sync needs absolute paths without control characters and a Node directory without colons.");
     }
     const path = [dirname(node), "/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"].join(":");
@@ -75,7 +75,8 @@ ${signature}
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array><string>${xml(launcher)}</string><string>sync</string><string>run</string><string>--autostart</string></array>
   <key>EnvironmentVariables</key><dict>
-    <key>TIDELINE_SYNC_HOME</key><string>${xml(scope)}</string>
+    <key>TIDELINE_SYNC_HOME</key><string>${xml(syncHome)}</string>${workspace ? `
+    <key>TIDELINE_SYNC_PROFILE</key><string>${xml(workspace)}</string>` : ""}
     <key>PATH</key><string>${xml(path)}</string>
   </dict>
   <key>RunAtLoad</key><true/>
@@ -89,7 +90,7 @@ Description=Tideline session sync
 
 [Service]
 ExecStart=:/bin/sh ${systemd(launcher)} sync run --autostart
-Environment=${systemd(`TIDELINE_SYNC_HOME=${scope}`)} ${systemd(`PATH=${path}`)}
+Environment=${systemd(`TIDELINE_SYNC_HOME=${syncHome}`)} ${systemd(`PATH=${path}`)}${workspace ? ` ${systemd(`TIDELINE_SYNC_PROFILE=${workspace}`)}` : ""}
 Restart=on-failure
 RestartSec=30s
 
@@ -254,7 +255,10 @@ export function syncAutostart() {
   const platform = process.platform;
   const uid = process.getuid?.();
   if ((platform !== "darwin" && platform !== "linux") || uid === undefined) return;
-  return createSyncAutostart({ platform, uid, home: homedir(), linuxConfigHome: process.env.XDG_CONFIG_HOME, scope: syncDirectoryPath() });
+  return createSyncAutostart({
+    platform, uid, home: homedir(), linuxConfigHome: process.env.XDG_CONFIG_HOME,
+    scope: collectorDirectoryPath(), syncHome: syncDirectoryPath(), workspace: collectorWorkspace(),
+  });
 }
 
 export async function configureSyncAutostart(action: "enable" | "disable" | "status") {

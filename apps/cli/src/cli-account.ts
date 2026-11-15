@@ -1,8 +1,8 @@
 import { cliAccountResponse, cliLoginResponse, workspaceAccessList, workspaceResponse } from "@tideline/contracts";
 import { z } from "zod";
 import { approveInBrowser, postToTideline, readJson, requestTideline, tidelineApiOrigin } from "./login";
-import { ensureSyncDirectory, openPrivateDatabase, openSyncStorage, SyncSetupMissingError } from "./sync-storage";
-import type { SyncConfig } from "./sync-storage";
+import { ensureSyncDirectory, openPrivateDatabase, SyncSetupMissingError, withCollectorWorkspace } from "./sync-storage";
+
 
 const accountPath = "/v1/cli/account";
 const accountFile = "cli-account.sqlite";
@@ -188,20 +188,13 @@ export async function login({ browser }: { browser: boolean }) {
 export async function logout() {
   const config = await readAccount();
   if (config) endpoint(config);
-  const storage = await openSyncStorage().catch((error) => {
-    if (!(error instanceof SyncSetupMissingError)) throw error;
-  });
-  let sync: SyncConfig | undefined;
-  try {
-    sync = storage?.config();
-  } finally {
-    storage?.close();
-  }
-  const ownsCollector = sync && (!config || (sync.apiOrigin === config.apiOrigin && (sync.userId
+  const { readLocalCollectors } = await import("./sync-workspaces");
+  const collectors = await readLocalCollectors();
+  const owned = collectors.filter(({ config: sync }) => !config || (sync.apiOrigin === config.apiOrigin && (sync.userId
     ? sync.userId === config.account.userId : sync.workspaceId === config.account.workspace.id)));
-  if (ownsCollector) {
+  if (owned.length) {
     const { revokeSync } = await import("./sync");
-    await revokeSync();
+    for (const { workspace } of owned) await withCollectorWorkspace(workspace, revokeSync);
   }
 
   if (config) {
@@ -218,7 +211,7 @@ export async function logout() {
     }
   }
   console.info("Signed out of the Tideline CLI.");
-  if (sync && !ownsCollector) console.info("A different workspace still has a local collector. Use tideline sync status to inspect it.");
+  if (collectors.length > owned.length) console.info("Another account still has a local collector. Use tideline sync workspaces to inspect it.");
 }
 
 export async function showWorkspace({ workspace, json }: { workspace?: string; json?: boolean }) {

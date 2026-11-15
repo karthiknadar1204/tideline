@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, unlink, writeFile } from "node:fs/promises";
@@ -45,7 +46,7 @@ const configSchema = z.union([
   sharedConfig.extend({ projects: z.array(approvedProjectSchema) }),
   sharedConfig.extend({ projectDirectory: z.string().min(1) }).transform(({ projectDirectory, ...config }) => ({
     ...config,
-    projects: [{ directory: projectDirectory, since: config.startedAt, githubRepository: undefined }],
+    projects: [{ directory: projectDirectory, since: config.startedAt, githubRepository: undefined, git: undefined }],
   })),
 ]);
 
@@ -113,8 +114,50 @@ export async function ensureSyncDirectory(create: boolean) {
   return directory;
 }
 
-export async function openSyncStorage({ lock = false, create = false } = {}) {
+const collectorContext = new AsyncLocalStorage<{ workspace?: string }>();
+const syncWorkspaceId = z.uuid().toLowerCase();
+
+export function collectorWorkspace() {
+  const scope = collectorContext.getStore();
+  if (scope) return scope.workspace;
+  const inherited = process.env.TIDELINE_SYNC_PROFILE;
+  if (!inherited) return;
+  const workspace = syncWorkspaceId.safeParse(inherited).data;
+  if (!workspace) throw new Error("The local sync workspace identifier is invalid.");
+  return workspace;
+}
+
+export function withCollectorWorkspace<T>(workspace: string | undefined, work: () => T): T {
+  return collectorContext.run({ workspace }, work);
+}
+
+export function collectorDirectoryPath() {
+  const workspace = collectorWorkspace();
+  const directory = syncDirectoryPath();
+  return workspace ? join(directory, "workspaces", workspace) : directory;
+}
+
+async function ensureCollectorDirectory(create: boolean) {
   const directory = await ensureSyncDirectory(create);
+  const workspace = collectorWorkspace();
+  if (!workspace) return directory;
+  const directoryWithProfiles = join(directory, "workspaces");
+  const collector = join(directoryWithProfiles, workspace);
+  for (const path of [directoryWithProfiles, collector]) {
+    if (create) await mkdir(path, { recursive: true, mode: 0o700 });
+    try {
+      await checkPrivatePath(path, "directory");
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) throw new SyncSetupMissingError("Set up sync for this workspace with tideline sync setup.");
+      throw error;
+    }
+  }
+  return collector;
+}
+
+export async function openSyncStorage({ lock = false, create = false } = {}) {
+  const directory = await ensureCollectorDirectory(create);
+  const workspace = collectorWorkspace();
 
   const writer = lock ? await openPrivateDatabase(directory, "sync-lock.sqlite", true) : undefined;
   try {
@@ -237,9 +280,13 @@ export async function openSyncStorage({ lock = false, create = false } = {}) {
     },
     config() {
       const row = db.prepare("SELECT value FROM config WHERE id = 1").get();
-      return row ? configSchema.parse(JSON.parse(String(row.value))) : undefined;
+      if (!row) return;
+      const config = configSchema.parse(JSON.parse(String(row.value)));
+      if (workspace && config.workspaceId !== workspace) throw new Error("This local collector is bound to a different workspace.");
+      return config;
     },
     saveConfig(config: SyncConfig) {
+      if (workspace && config.workspaceId !== workspace) throw new Error("This local collector is bound to a different workspace.");
       db.prepare("INSERT INTO config (id, value) VALUES (1, ?)").run(JSON.stringify(config));
     },
     githubCollection(account: string, repository: string) {

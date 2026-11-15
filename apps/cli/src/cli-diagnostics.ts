@@ -6,6 +6,7 @@ import { CliLoginRequired, readAccountStatus } from "./cli-account";
 import { checkClerkDevice, readJson, requestTideline, tidelineApiOrigin } from "./login";
 import { readBackgroundStatus } from "./sync-background";
 import { databaseSources, fileSources } from "./sync-sources";
+import { withSelectedCollector } from "./sync-workspaces";
 import { loadSyncCredential, openSyncStorage, SyncSetupMissingError } from "./sync-storage";
 
 type Check = { name: string; status: "ok" | "warning" | "error"; detail: string };
@@ -33,7 +34,7 @@ async function collectorStatus() {
 
 export async function whoami({ json }: { json?: boolean }) {
   const status = await readAccountStatus();
-  const collector = await collectorStatus();
+  const collector = await withSelectedCollector(status.workspaceId, collectorStatus);
   const uploads = collector?.config.workspaceId === status.workspaceId &&
     collector.config.apiOrigin === tidelineApiOrigin() ? { ...collector.counts, failures: collector.failures } : null;
   if (json) {

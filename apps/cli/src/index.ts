@@ -31,7 +31,10 @@ program.command("logout").description("Sign out and revoke this CLI's access").a
 program.command("whoami").description("Show the signed-in account, workspace, and upload failures")
   .option("--json", "Print JSON").action(whoami);
 program.command("doctor").description("Check sign-in, API connectivity, agent storage, and sync")
-  .option("--json", "Print JSON").action(doctor);
+  .option("--workspace <id>", "Check the workspace's local collector")
+  .option("--json", "Print JSON")
+  .action((options: CollectorOptions & { json?: boolean }) =>
+    options.workspace ? runCollectorCommand(options, () => doctor(options)) : doctor(options));
 program.command("update").description("Check for a release and update an installed CLI")
   .option("--check", "Check for an update without installing")
   .option("--yes", "Install the release without prompting")
@@ -101,6 +104,17 @@ importFlags(program.command("import <file-or-session>").description("Import one 
   .option("--no-browser", "Show the approval link without opening your browser")
   .action(runImport);
 
+type CollectorOptions = { workspace?: string };
+
+function collectorOption(command: Command) {
+  return command.option("--workspace <id>", "Select the workspace's collector");
+}
+
+async function runCollectorCommand<T>(options: CollectorOptions, work: () => Promise<T>) {
+  const { withSelectedCollector } = await import("./sync-workspaces");
+  return withSelectedCollector(options.workspace, work);
+}
+
 const sync = program.command("sync").description("Automatically sync sessions from selected projects");
 const hooks = program.command("hooks").description("Manage local agent lifecycle hooks that wake Tideline sync");
 for (const [action, description] of [
@@ -108,12 +122,12 @@ for (const [action, description] of [
   ["remove", "Remove hooks from this sync setup"],
   ["status", "Show installed hooks for this sync setup"],
 ] as const) {
-  hooks.command(action).description(description)
+  collectorOption(hooks.command(action).description(description))
     .addOption(new Option("--agent <name>", "Choose the agent settings to use").choices(["all", "codex", "claude-code"]).default("all"))
-    .action(async ({ agent }: { agent: string }) => {
+    .action((options: CollectorOptions & { agent: string }) => runCollectorCommand(options, async () => {
       const { configureNativeHooks } = await import("./native-hooks");
-      await configureNativeHooks(action, agent);
-    });
+      await configureNativeHooks(action, options.agent);
+    }));
 }
 hooks.command("__wake <agent> <event>", { hidden: true }).action(async (agent: string, event: string) => {
   const { runNativeHook } = await import("./native-hooks");
@@ -164,9 +178,11 @@ setupOptions(program.command("connect").description("Connect local repositories 
 setupOptions(program.command("onboard").description("Connect your first repositories to the dashboard"))
   .action((options, command: Command) => runSetup({ ...options, code: command.optsWithGlobals().code, onboarding: true }));
 
-async function retry() {
-  const { retrySync } = await import("./sync");
-  await retrySync();
+function retry(options: CollectorOptions) {
+  return runCollectorCommand(options, async () => {
+    const { retrySync } = await import("./sync");
+    await retrySync();
+  });
 }
 
 setupOptions(program.command("enable").description("Choose repositories to enable for sync")).action(runSetup);
@@ -179,10 +195,10 @@ const upload = importFlags(setupOptions(program.command("upload [file-or-session
 upload.option("--retry", "Retry queued and previously failed uploads").action(async (fileOrSession, options) => {
   const supplied = Object.keys(options).filter((key) => upload.getOptionValueSource(key) === "cli");
   if (options.retry) {
-    if (fileOrSession || supplied.some((key) => key !== "retry")) {
-      throw new InvalidArgumentError("Use --retry by itself to retry uploads from your current setup.");
+    if (fileOrSession || supplied.some((key) => key !== "retry" && key !== "workspace")) {
+      throw new InvalidArgumentError("Use --retry with the optional --workspace to retry uploads.");
     }
-    await retry();
+    await retry(options);
   } else if (fileOrSession) {
     if (supplied.some((key) => !importOnly.has(key) && !sharedUploadOptions.has(key))) {
       throw new InvalidArgumentError("Use import options when uploading a session file or ID.");
@@ -194,7 +210,12 @@ upload.option("--retry", "Retry queued and previously failed uploads").action(as
   }
 });
 
-sync.command("retry").description("Retry queued and previously failed uploads").action(retry);
+collectorOption(sync.command("retry").description("Retry queued and previously failed uploads")).action(retry);
+sync.command("workspaces").description("Show local collector workspaces and their selected repositories")
+  .option("--json", "Print JSON").action(async ({ json }) => {
+    const { listSyncWorkspaces } = await import("./sync-workspaces");
+    await listSyncWorkspaces({ json });
+  });
 
 function queryOptions(command: Command) {
   return command
@@ -247,34 +268,33 @@ program.command("__query", { hidden: true }).action(async () => {
   await runSqlWorker();
 });
 
-sync.command("run")
-  .description("Sync Codex, Claude Code, Cursor, and OpenCode in this terminal")
+collectorOption(sync.command("run").description("Sync Codex, Claude Code, Cursor, and OpenCode in this terminal"))
   .addOption(new Option("--background-id <id>").hideHelp().conflicts("autostart"))
   .addOption(new Option("--autostart").hideHelp())
-  .action(async (options) => {
+  .action((options) => runCollectorCommand(options, async () => {
     const { runSync } = await import("./sync");
     await runSync({ backgroundId: options.backgroundId, autostart: options.autostart });
-  });
+  }));
 
-sync.command("start").description("Start sync in the background").action(async () => {
+collectorOption(sync.command("start").description("Start sync in the background")).action((options) => runCollectorCommand(options, async () => {
   const { startBackgroundSync } = await import("./sync-background");
   await startBackgroundSync();
-});
+}));
 
-sync.command("once").description("Scan and upload approved sessions once, then exit").action(async () => {
+collectorOption(sync.command("once").description("Scan and upload approved sessions once, then exit")).action((options) => runCollectorCommand(options, async () => {
   const { syncOnce } = await import("./sync");
   await syncOnce();
-});
+}));
 
-sync.command("stop").description("Stop background sync").action(async () => {
+collectorOption(sync.command("stop").description("Stop background sync")).action((options) => runCollectorCommand(options, async () => {
   const { stopBackgroundSync } = await import("./sync-background");
   await stopBackgroundSync();
-});
+}));
 
-sync.command("status").description("Show selected projects and upload status").action(async () => {
+collectorOption(sync.command("status").description("Show selected projects and upload status")).action((options) => runCollectorCommand(options, async () => {
   const { syncStatus } = await import("./sync");
   await syncStatus();
-});
+}));
 
 const autostart = sync.command("autostart").description("Manage automatic sync when you sign in to this computer");
 for (const [action, description] of [
@@ -282,16 +302,16 @@ for (const [action, description] of [
   ["disable", "Stop sync at login and remove its service"],
   ["status", "Show whether sync at login is enabled and running"],
 ] as const) {
-  autostart.command(action).description(description).action(async () => {
+  collectorOption(autostart.command(action).description(description)).action((options) => runCollectorCommand(options, async () => {
     const { configureSyncAutostart } = await import("./sync-autostart");
     await configureSyncAutostart(action);
-  });
+  }));
 }
 
-sync.command("revoke").description("Revoke this collector's upload access").action(async () => {
+collectorOption(sync.command("revoke").description("Revoke this collector's upload access")).action((options) => runCollectorCommand(options, async () => {
   const { revokeSync } = await import("./sync");
   await revokeSync();
-});
+}));
 
 try {
   await program.parseAsync();

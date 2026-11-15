@@ -9,7 +9,7 @@ import { z } from "zod";
 import { installedCli } from "./cli-update";
 import { tidelineApiOrigin } from "./login";
 import { createApprovedScope } from "./sync-projects";
-import { openSyncStorage, syncDirectoryPath } from "./sync-storage";
+import { collectorDirectoryPath, collectorWorkspace, openSyncStorage, syncDirectoryPath } from "./sync-storage";
 import { wakeSyncCollector } from "./sync-wake";
 
 const agents = z.enum(["codex", "claude-code"]);
@@ -25,7 +25,7 @@ const hookGroups = z.array(hookGroup);
 const maximumSettingsBytes = 1024 * 1024;
 type Agent = z.infer<typeof agents>;
 type Settings = z.infer<typeof settingsObject>;
-type InstallContext = { launcher: string; node: string };
+type InstallContext = { launcher: string; node: string; syncHome: string; workspace?: string };
 
 function settingsPath(agent: Agent) {
   return agent === "codex"
@@ -150,7 +150,9 @@ function reconcileSettings(value: Settings, path: string, agent: Agent, scope: s
     if (foundEvent) found++;
     if (installation) {
       const path = [dirname(installation.node), "/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"].join(":");
-      const args = ["PATH=" + path, "TIDELINE_SYNC_HOME=" + scope, "NODE_NO_WARNINGS=1", installation.launcher];
+      const args = ["PATH=" + path, "TIDELINE_SYNC_HOME=" + installation.syncHome, "NODE_NO_WARNINGS=1"];
+      if (installation.workspace) args.push("TIDELINE_SYNC_PROFILE=" + installation.workspace);
+      args.push(installation.launcher);
       const hook = { type: "command", command: `/usr/bin/env ${args.map(shellQuote).join(" ")}${commandSuffix}`, timeout: 3,
         ...(event !== "SessionEnd" && { async: true }) };
       remaining.push({ hooks: [hook] });
@@ -165,13 +167,13 @@ function reconcileSettings(value: Settings, path: string, agent: Agent, scope: s
 export async function configureNativeHooks(action: "install" | "remove" | "status", selection: unknown = "all", { reportFollowUp = false } = {}) {
   if (process.platform === "win32") throw new Error("Tideline sync hooks currently require macOS or Linux.");
   const target = choice.parse(selection);
-  const scope = syncDirectoryPath();
+  const scope = collectorDirectoryPath();
   const selected = target === "all" ? agents.options : [target];
   let installation: InstallContext | undefined;
   if (action === "install") {
     const installed = await installedCli();
     if (!installed) throw new Error("Install Tideline using your dashboard's setup command before installing hooks.");
-    installation = { launcher: installed.launcher, node: process.execPath };
+    installation = { launcher: installed.launcher, node: process.execPath, syncHome: syncDirectoryPath(), workspace: collectorWorkspace() };
     if (![scope, installation.launcher, installation.node].every((path) => isAbsolute(path) && !/[\x00-\x1f\x7f]/u.test(path)) ||
         dirname(installation.node).includes(":")) throw new Error("Hooks need absolute paths without control characters and a Node directory without colons.");
     if (!reportFollowUp) {
@@ -234,7 +236,7 @@ async function readHookSessionId() {
 
 async function wakeReportFollowUps(agent: Agent, event: string) {
   const sessionId = await readHookSessionId();
-  if (!sessionId || (event !== "Stop" && event !== "SessionEnd") || !process.argv[1]) return;
+  if (!sessionId || collectorWorkspace() || (event !== "Stop" && event !== "SessionEnd") || !process.argv[1]) return;
   const { hasReportFollowers } = await import("./report-follow-up");
   if (!await hasReportFollowers(agent, sessionId)) return;
   const child = spawn(process.execPath, [process.argv[1], "hooks", "__report-follow-up", agent, sessionId], {

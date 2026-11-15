@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { tidelineApiOrigin } from "./login";
 import { syncAutostart } from "./sync-autostart";
-import { backgroundStartupTimeout, openSyncStorage, SyncLockError, SyncSetupMissingError } from "./sync-storage";
+import { backgroundStartupTimeout, collectorWorkspace, openSyncStorage, SyncLockError, SyncSetupMissingError, syncDirectoryPath } from "./sync-storage";
 
 type Storage = Awaited<ReturnType<typeof openSyncStorage>>;
 
@@ -84,7 +84,7 @@ export async function startBackgroundSync() {
     const child = spawn(process.execPath, [entry, "sync", "run", "--background-id", id], {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, TIDELINE_SYNC_HOME: storage.directory },
+      env: { ...process.env, TIDELINE_SYNC_HOME: syncDirectoryPath(), TIDELINE_SYNC_PROFILE: collectorWorkspace() ?? "" },
     });
     let exited = false;
     child.once("error", () => { exited = true; });
