@@ -11,6 +11,7 @@ export async function linkReportSession(reportId: string, session: string, optio
   source?: string;
   json?: boolean;
   waitForSession?: boolean;
+  follow?: boolean;
 }) {
   const report = savedReportSummary.shape.id.safeParse(reportId.toLowerCase()).data;
   if (!report) throw new Error("Provide the UUID of a saved Tideline report.");
@@ -19,7 +20,7 @@ export async function linkReportSession(reportId: string, session: string, optio
   if (!source.success) throw new Error("Use --source codex, claude-code, cursor, or opencode.");
   if (!session || session.length > 256) throw new Error("Provide a Tideline session UUID or native agent session ID.");
   const sessionId = source.data === "cursor" || source.data === "opencode" ? sourceSessionUuid(source.data, session) : session;
-  const request = linkSavedReportSessionRequest.safeParse({ sessionId, source: source.data });
+  const request = linkSavedReportSessionRequest.safeParse({ sessionId, source: source.data, follow: options.follow ? true : undefined });
   if (!request.success) throw new Error("Provide a session UUID, or use --source with the native agent session ID.");
 
   const client = await openCliAccount(options);
@@ -33,6 +34,8 @@ export async function linkReportSession(reportId: string, session: string, optio
             throw new Error("That report is unavailable. Select its workspace and sign in as the report author.");
           case "Tideline request failed (HTTP 409).":
             throw new Error("More than one agent used this session ID. Retry with --source.");
+          case "Tideline request failed (HTTP 403).":
+            throw new Error("Follow-up requires a Codex or Claude Code session you uploaded.");
           case "Tideline request failed (HTTP 400).":
             throw new Error(`A report can reference up to ${MAX_REPORT_SESSION_REFERENCES} sessions.`);
         }
@@ -54,4 +57,5 @@ export async function linkReportSession(reportId: string, session: string, optio
   const url = new URL(`/workspace/${client.workspaceId}/reports/saved/${result.report.id}`, tidelineWebOrigin()).href;
   if (options.json) console.info(JSON.stringify({ ...result, url }));
   else console.info(`${result.linked ? "Linked session" : "Session already linked"} ${result.sessionId}.\n${url}`);
+  return { ...result, workspaceId: client.workspaceId, userId: client.userId };
 }

@@ -76,6 +76,8 @@ function CliGuide() {
           ["import <file> --workspace <id> --dry-run", "Preview a single sanitized Codex JSONL file. Use --source claude-code for a Claude Code log. Review the file and use --sanitized to upload it."],
           ["report link <report-id> <session-id>", "Cite a synced session in a report you authored in the same workspace. Use --source with a native agent session ID."],
           ["import <session-id> --analysis <report-id> --sanitized", "Import and cite a local Codex or Claude Code session by its native ID. Review the session before passing --sanitized and approve the upload in your browser."],
+          ["import <session-id> --analysis <report-id> --sanitized --follow", "Sync new conversation messages from that Codex or Claude Code session for seven days. Follow-up stays in the report’s workspace and redacts supported secret patterns."],
+          ["report sync", "Check every approved report conversation for new messages now."],
           ["pull --repo my-repo --out ./tideline-export", "Save matching conversations as JSONL files with a local manifest."],
           ['count "test failed" --in ./tideline-export', "Count matching messages in a local export. Use --unit session to count conversations."],
           ['sql "SELECT source, count(*) FROM sessions GROUP BY source"', "Query synced records with read-only SQLite. Use --in for a local export or --out for a new CSV or JSONL file."],

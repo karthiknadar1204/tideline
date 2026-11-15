@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm, writeFile } from "node:fs/promises";
@@ -161,7 +162,7 @@ function reconcileSettings(value: Settings, path: string, agent: Agent, scope: s
   return { value: Object.keys(configured).length ? { ...rest, hooks: configured } : rest, found };
 }
 
-export async function configureNativeHooks(action: "install" | "remove" | "status", selection: unknown = "all") {
+export async function configureNativeHooks(action: "install" | "remove" | "status", selection: unknown = "all", { reportFollowUp = false } = {}) {
   if (process.platform === "win32") throw new Error("Tideline sync hooks currently require macOS or Linux.");
   const target = choice.parse(selection);
   const scope = syncDirectoryPath();
@@ -173,15 +174,17 @@ export async function configureNativeHooks(action: "install" | "remove" | "statu
     installation = { launcher: installed.launcher, node: process.execPath };
     if (![scope, installation.launcher, installation.node].every((path) => isAbsolute(path) && !/[\x00-\x1f\x7f]/u.test(path)) ||
         dirname(installation.node).includes(":")) throw new Error("Hooks need absolute paths without control characters and a Node directory without colons.");
-    const storage = await openSyncStorage();
-    try {
-      const config = storage.config();
-      if (!config?.projects.length) throw new Error("Choose repositories with tideline sync setup before installing hooks.");
-      if (config.revoked || Date.now() >= Date.parse(config.expiresAt) || config.apiOrigin !== tidelineApiOrigin()) {
-        throw new Error("Renew the collector's workspace approval before installing hooks.");
+    if (!reportFollowUp) {
+      const storage = await openSyncStorage();
+      try {
+        const config = storage.config();
+        if (!config?.projects.length) throw new Error("Choose repositories with tideline sync setup before installing hooks.");
+        if (config.revoked || Date.now() >= Date.parse(config.expiresAt) || config.apiOrigin !== tidelineApiOrigin()) {
+          throw new Error("Renew the collector's workspace approval before installing hooks.");
+        }
+      } finally {
+        storage.close();
       }
-    } finally {
-      storage.close();
     }
   }
 
@@ -202,18 +205,49 @@ export async function configureNativeHooks(action: "install" | "remove" | "statu
   }
   if (action === "install" && selected.includes("codex")) console.info("Review the Tideline hooks with /hooks in Codex before they run.");
   if (action === "install" && selected.includes("claude-code")) console.info("Restart Claude Code if your existing session has not loaded the new hooks.");
-  if (action === "install") console.info("Hooks wake Tideline while background sync is running.");
+  if (action === "install" && !reportFollowUp) console.info("Hooks wake Tideline while background sync is running.");
+}
+
+const hookPayload = z.object({ session_id: z.uuid() });
+const maximumHookInput = 16 * 1024;
+
+async function readHookSessionId() {
+  if (process.stdin.isTTY) return;
+  const deadline = setTimeout(() => process.stdin.destroy(), 1_500).unref();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  try {
+    for await (const chunk of process.stdin) {
+      if (!Buffer.isBuffer(chunk)) continue;
+      bytes += chunk.length;
+      if (bytes <= maximumHookInput) chunks.push(chunk);
+    }
+    if (bytes > maximumHookInput) return;
+    const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return hookPayload.safeParse(data).data?.session_id;
+  } catch {
+    return;
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+async function wakeReportFollowUps(agent: Agent, event: string) {
+  const sessionId = await readHookSessionId();
+  if (!sessionId || (event !== "Stop" && event !== "SessionEnd") || !process.argv[1]) return;
+  const { hasReportFollowers } = await import("./report-follow-up");
+  if (!await hasReportFollowers(agent, sessionId)) return;
+  const child = spawn(process.execPath, [process.argv[1], "hooks", "__report-follow-up", agent, sessionId], {
+    detached: true, stdio: "ignore",
+  });
+  child.on("error", () => {});
+  child.unref();
 }
 
 export async function runNativeHook(source: unknown, event: string) {
   const agent = agents.safeParse(source).data;
   if (!agent || !events[agent].some((supported) => supported === event)) return;
-  if (!process.stdin.isTTY) {
-    const deadline = setTimeout(() => process.stdin.destroy(), 1_500).unref();
-    process.stdin.once("end", () => clearTimeout(deadline));
-    process.stdin.on("error", () => {});
-    process.stdin.resume();
-  }
+  const follow = wakeReportFollowUps(agent, event).catch(() => {});
   try {
     const storage = await openSyncStorage();
     try {
@@ -225,6 +259,7 @@ export async function runNativeHook(source: unknown, event: string) {
     }
   } catch { /* Do not interrupt the coding agent if monitoring is unavailable. */ }
   finally {
+    await follow;
     if (agent === "codex" && event === "Stop") process.stdout.write("{\"continue\":true}\n");
   }
 }

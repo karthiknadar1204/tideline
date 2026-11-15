@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
+import { CLI_SESSION_PAGE_SIZE, codexSkillCatalog, codexSkillInstructions, MAX_CODEX_IMPORT_EVENTS, MAX_SESSION_COMMITS, sessionSourceLabel, WORKSPACE_SESSION_PAGE_SIZE } from "@tideline/contracts";
 import type {
   CliSessionListQuery, RepositoryEvidenceQuery, RepositoryInstructionUpload, SessionActivity, SessionCapture, SessionImportRequest, SessionSummary, SyncInventoryUpdate,
   WorkspaceActivityKind, WorkspaceActivityQuery, WorkspaceSessionSearchQuery,
@@ -11,7 +11,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { alias } from "drizzle-orm/pg-core";
 import { lockAccount } from "./account-retirement";
-import { agentSessions, repositoryInstructions, sessionShares, syncGrants, syncInventories, transcriptAttachments, transcriptRecords, workspaceMembers, workspaces } from "./schema";
+import { agentSessions, reportSessionFollows, repositoryInstructions, savedReports, sessionShares, syncGrants, syncInventories, transcriptAttachments, transcriptRecords, workspaceMembers, workspaces } from "./schema";
 import { readRepositoryFiles, readRepositoryInstructions } from "./repository-evidence";
 import { sessionReportedFrustration } from "./session-frustration";
 import { readSessionIntelligence } from "./session-intelligence";
@@ -209,6 +209,46 @@ export function createSessionStore(databaseUrl: string) {
         const workspace = await lockAccessibleWorkspace(transaction, request.workspaceId, userId);
         if (!workspace) return;
         return receiveSession(transaction, request, false, workspace.kind === "team" ? userId : null);
+      });
+    },
+
+    async receiveReportFollowUp({ workspaceId, userId, reportId, sessionId, events }: {
+      workspaceId: string;
+      userId: string;
+      reportId: string;
+      sessionId: string;
+      events: Messages;
+    }) {
+      return db.transaction(async (transaction) => {
+        const workspace = await lockAccessibleWorkspace(transaction, workspaceId, userId);
+        if (!workspace) return;
+        const uploadedBy = workspace.kind === "team" ? userId : null;
+        const [session] = await transaction.select({
+          source: agentSessions.source,
+          sourceSessionId: agentSessions.sourceSessionId,
+          startedAt: agentSessions.startedAt,
+          messages: agentSessions.messages,
+        }).from(reportSessionFollows)
+          .innerJoin(savedReports, eq(savedReports.id, reportSessionFollows.reportId))
+          .innerJoin(agentSessions, eq(agentSessions.id, reportSessionFollows.sessionId))
+          .where(and(
+            eq(reportSessionFollows.reportId, reportId), eq(reportSessionFollows.sessionId, sessionId),
+            gt(reportSessionFollows.expiresAt, sql`clock_timestamp()`),
+            eq(savedReports.workspaceId, workspaceId), eq(savedReports.authorId, userId),
+            sql`${sessionId}::uuid = any(${savedReports.sessionIds})`,
+            eq(agentSessions.workspaceId, workspaceId), isNull(agentSessions.deletedAt),
+            uploadedBy ? eq(agentSessions.uploadedBy, uploadedBy) : isNull(agentSessions.uploadedBy),
+          )).for("update", { of: agentSessions });
+        if (!session || (session.source !== "codex" && session.source !== "claude-code")) return;
+
+        const throughLine = session.messages.at(-1)?.line ?? 0;
+        const newer = events.filter(({ line }) => line > throughLine);
+        const messages = [...session.messages, ...newer];
+        if (messages.length > MAX_CODEX_IMPORT_EVENTS) return null;
+        const { source, sourceSessionId, startedAt } = session;
+        return receiveSession(transaction, {
+          version: 1, workspaceId, session: { source, sourceSessionId, startedAt, events: messages },
+        }, true, uploadedBy);
       });
     },
 

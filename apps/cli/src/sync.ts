@@ -18,6 +18,7 @@ import { createGitHubActivitySync, readGitHubRepository } from "./github-activit
 import { approveInBrowser, openBrowser, postToTideline, readJson, tidelineApiOrigin, tidelineWebOrigin } from "./login";
 import { readRepository } from "./repository";
 import { createRepositoryInstructionSync } from "./repository-instructions";
+import { syncReportFollowers } from "./report-follow-up";
 import { redactConversationText } from "./session-safety";
 import { prepareBaseSessionImport } from "./session-turns";
 import type { LiveSession, SessionCandidate } from "./session-jsonl";
@@ -605,6 +606,7 @@ export async function syncOnce() {
     if (transcriptResult?.deferredChildren) {
       console.warn("Some subagent transcripts are waiting for session processing. Run tideline sync once again to continue.");
     }
+    await syncReportFollowers({ signal: stopping.signal });
     const counts = storage.counts();
     const failed = counts.get("failed") ?? 0;
     console.info(`Sync complete. Received: ${counts.get("received") ?? 0}. Failed: ${failed}.`);
@@ -635,6 +637,8 @@ async function runCollector(backgroundId?: string, autostart = false) {
   let exitPhase: "stopped" | "failed" = "failed";
   let monitor: ReturnType<typeof setInterval> | undefined;
   let githubTask: Promise<void> | undefined;
+  let reportTask: Promise<void> | undefined;
+  let nextReportSyncAt = 0;
   try {
     if (!backgroundId && !storage.prepareForeground()) throw new Error("Background sync is starting. Check tideline sync status.");
     const config = requireSetup(storage);
@@ -672,6 +676,11 @@ async function runCollector(backgroundId?: string, autostart = false) {
     while (!stopping.signal.aborted) {
       if (Date.now() >= Date.parse(config.expiresAt)) {
         throw new SyncApprovalError("Tideline sync authorization expired. Run tideline sync revoke and set it up again.");
+      }
+
+      if (!reportTask && Date.now() >= nextReportSyncAt) {
+        nextReportSyncAt = Date.now() + 30_000;
+        reportTask = syncReportFollowers({ signal: stopping.signal }).catch(() => {}).finally(() => { reportTask = undefined; });
       }
 
       const missing = await Promise.all(config.projects.map(async ({ directory }) =>
@@ -726,7 +735,7 @@ async function runCollector(backgroundId?: string, autostart = false) {
   } finally {
     stopping.abort();
     wake.close();
-    await githubTask;
+    await Promise.all([githubTask, reportTask]);
     if (monitor) clearInterval(monitor);
     if (backgroundId) storage.finishBackground(backgroundId, exitPhase);
     process.off("SIGINT", stop);

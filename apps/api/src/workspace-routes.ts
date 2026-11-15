@@ -433,7 +433,7 @@ export function createWorkspaceRoutes() {
     await next();
   });
 
-  registerSavedReportRoutes(routes, savedReports, requireCliAccount);
+  registerSavedReportRoutes(routes, savedReports, sessions, requireCliAccount);
   registerTranscriptReaders(routes, services.transcripts, requireCliAccount);
   registerGitHubActivityRoutes(routes, services.githubActivity, requireCliAccount, parseSyncAuthorization);
   registerCliSyncCoverageRoute(routes, sessions, requireCliAccount);

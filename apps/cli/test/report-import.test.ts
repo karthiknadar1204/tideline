@@ -53,6 +53,12 @@ test("file import and native analysis import preserve the sanitized-upload bound
   assert.match(preview.stdout, new RegExp(`Codex session: ${session} with 2 text messages`));
   assert.match(preview.stdout, new RegExp(`Would link the session to report ${report}`));
   assert.doesNotMatch(preview.stdout, /MUST_NOT_UPLOAD/);
+  await assert.rejects(cli(file, "--follow"), /Use --follow with --analysis and --sanitized/);
+  await assert.rejects(cli(file, "--analysis", report, "--follow"), /pass --sanitized/);
+  const followPreview = await cli(session, "--analysis", report, "--follow", "--dry-run");
+  assert.match(followPreview.stdout, /approve new messages for seven days/);
+  await assert.rejects(cli(new URL("../../../packages/test-fixtures/codex/sanitized-session.jsonl", import.meta.url).pathname,
+    "--analysis", report, "--follow", "--dry-run"), /configured Codex or Claude Code logs/);
   const filePreview = await cli(file, "--analysis", report, "--dry-run");
   assert.match(filePreview.stdout, new RegExp(`Would link the session to report ${report}`));
   await assert.rejects(cli(randomUUID(), "--analysis", report, "--dry-run"), /No matching local/);

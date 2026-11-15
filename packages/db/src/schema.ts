@@ -227,6 +227,15 @@ export const savedReports = pgTable("saved_reports", {
   index("saved_reports_workspace_created_index").on(table.workspaceId, table.createdAt.desc(), table.id.desc()),
 ]);
 
+export const reportSessionFollows = pgTable("report_session_follows", {
+  reportId: uuid("report_id").notNull().references(() => savedReports.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.reportId, table.sessionId] }),
+  index("report_session_follows_session_index").on(table.sessionId),
+]);
+
 export const weeklyDigestSubscriptions = pgTable("weekly_digest_subscriptions", {
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   cadence: text("cadence").$type<DigestCadence>().notNull().default("weekly"),

@@ -116,6 +116,7 @@ export async function openCliAccount({ workspace }: { workspace?: string } = {})
   const stored = await activeAccount();
   return {
     workspaceId: workspaceIdFor(stored, workspace),
+    userId: stored.account.userId,
     async get<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal) {
       return checkedResponse(await requestAccount(stored, "GET", path, { signal }), schema);
     },
@@ -210,6 +211,8 @@ export async function logout() {
       db.exec("PRAGMA secure_delete = ON");
       const result = db.prepare("DELETE FROM account WHERE id = 1 AND json_extract(value, '$.token') = ?").run(config.token);
       if (!result.changes) throw new Error("CLI account changed during sign-out. Run tideline whoami.");
+      const { forgetReportFollowers } = await import("./report-follow-up");
+      await forgetReportFollowers(config.account.userId, config.apiOrigin);
     } finally {
       db.close();
     }

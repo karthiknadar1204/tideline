@@ -40,7 +40,8 @@ program.command("update").description("Check for a release and update an install
     await updateCli(options);
   });
 
-program.command("report").description("Manage saved reports").command("link <report> <session>")
+const report = program.command("report").description("Manage saved reports");
+report.command("link <report> <session>")
   .description("Link an already-synced session to a report you authored")
   .option("--source <agent>", "Use a native session ID for codex, claude-code, cursor, or opencode")
   .option("--workspace <id>", "Choose a workspace")
@@ -49,6 +50,11 @@ program.command("report").description("Manage saved reports").command("link <rep
     const { linkReportSession } = await import("./report-link");
     await linkReportSession(report, session, options);
   });
+
+report.command("sync").description("Sync new messages from sessions approved for report follow-up").action(async () => {
+  const { syncReportFollowers } = await import("./report-follow-up");
+  await syncReportFollowers({ manual: true });
+});
 
 program.command("mcp").description("Serve one workspace to an MCP client over stdio")
   .requiredOption("--workspace <id>", "Workspace ID this connection can access")
@@ -75,11 +81,13 @@ program.command("github").description("Sync GitHub repository activity").command
 function importFlags(command: Command) {
   return command.option("--source <source>", "Agent source (defaults to Codex for a JSONL file)")
     .option("--analysis <report>", "Link this session to a saved report")
+    .option("--follow", "Sync new messages for seven days (with --analysis --sanitized)")
     .option("--sanitized", "Confirm the selected file is safe to upload")
     .option("--dry-run", "Preview the import without sending data");
 }
 
-async function runImport(fileOrSession: string, options: ImportOptions & { analysis?: string }) {
+async function runImport(fileOrSession: string, options: ImportOptions & { analysis?: string; follow?: boolean }) {
+  if (options.follow && !options.analysis) throw new InvalidArgumentError("Use --follow with --analysis and --sanitized.");
   if (!options.analysis) {
     await importSession(fileOrSession, options);
     return;
@@ -110,6 +118,11 @@ for (const [action, description] of [
 hooks.command("__wake <agent> <event>", { hidden: true }).action(async (agent: string, event: string) => {
   const { runNativeHook } = await import("./native-hooks");
   await runNativeHook(agent, event);
+});
+
+hooks.command("__report-follow-up <agent> <session>", { hidden: true }).action(async (source: string, sessionId: string) => {
+  const { syncReportFollowers } = await import("./report-follow-up");
+  await syncReportFollowers({ source, sessionId });
 });
 
 const runSetup = async (options: Parameters<typeof import("./sync").setupSync>[0]) => {
@@ -159,7 +172,7 @@ async function retry() {
 setupOptions(program.command("enable").description("Choose repositories to enable for sync")).action(runSetup);
 setupOptions(program.command("disable").description("Deselect repositories or pause all uploads")).action(runSetup);
 
-const importOnly = new Set(["source", "analysis", "sanitized", "dryRun"]);
+const importOnly = new Set(["source", "analysis", "sanitized", "dryRun", "follow"]);
 const sharedUploadOptions = new Set(["workspace", "browser"]);
 const upload = importFlags(setupOptions(program.command("upload [file-or-session]")
   .description("Choose repositories, or upload one sanitized session")));

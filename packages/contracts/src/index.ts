@@ -225,11 +225,13 @@ export const sessionSource = z.enum(["codex", "claude-code", "cursor", "opencode
 export const linkSavedReportSessionRequest = z.strictObject({
   sessionId: z.uuid().toLowerCase(),
   source: sessionSource.optional(),
+  follow: z.literal(true).optional(),
 });
 export const linkSavedReportSessionResponse = z.strictObject({
   report: savedReportSummary,
   sessionId: z.uuid(),
   linked: z.boolean(),
+  followUntil: z.iso.datetime().optional(),
 });
 export type LinkSavedReportSessionRequest = z.infer<typeof linkSavedReportSessionRequest>;
 export type LinkSavedReportSessionResponse = z.infer<typeof linkSavedReportSessionResponse>;
@@ -545,6 +547,13 @@ const conversationMessage = z.strictObject({
   timestamp: z.iso.datetime(),
 });
 
+export const reportFollowUpRequest = z.strictObject({
+  events: z.array(conversationMessage).min(1).max(MAX_CODEX_IMPORT_EVENTS).refine(
+    (events) => events.every((event, index) => index === 0 || events[index - 1].line < event.line),
+    { message: "Messages must be in source line order." },
+  ),
+});
+
 export const sessionImportRequest = z.strictObject({
   version: z.literal(1),
   workspaceId: workspaceResponse.shape.id,
@@ -552,10 +561,7 @@ export const sessionImportRequest = z.strictObject({
     source: sessionSource.default("codex"),
     sourceSessionId: z.uuid(),
     startedAt: z.iso.datetime(),
-    events: z.array(conversationMessage).min(1).max(MAX_CODEX_IMPORT_EVENTS).refine(
-      (events) => events.every((event, index) => index === 0 || events[index - 1].line < event.line),
-      { message: "Messages must be in source line order." },
-    ),
+    events: reportFollowUpRequest.shape.events,
     analytics: sessionAnalytics.optional(),
     activity: sessionActivity.optional(),
     review: sessionReview.optional(),

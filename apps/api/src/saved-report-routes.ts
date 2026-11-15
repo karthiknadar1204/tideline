@@ -1,5 +1,6 @@
-import { linkSavedReportSessionRequest, savedReportPage, saveReportRequest, workspaceResponse } from "@tideline/contracts";
+import { codexImportResponse, linkSavedReportSessionRequest, MAX_CODEX_IMPORT_BYTES, reportFollowUpRequest, savedReportPage, saveReportRequest, workspaceResponse } from "@tideline/contracts";
 import type { createSavedReportStore } from "@tideline/db/reports";
+import type { createSessionStore } from "@tideline/db/sessions";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { WorkspaceContext } from "./workspace-routes";
@@ -11,6 +12,7 @@ const uuid = workspaceResponse.shape.id;
 export function registerSavedReportRoutes(
   routes: Hono<WorkspaceContext>,
   reports: ReturnType<typeof createSavedReportStore>,
+  sessions: ReturnType<typeof createSessionStore>,
   requireCliAccount: MiddlewareHandler<WorkspaceContext>,
 ) {
   routes.get(reportListPath, async (context) => {
@@ -71,7 +73,24 @@ export function registerSavedReportRoutes(
       case "report-unavailable": return context.json({ error: "Report not found." }, 404);
       case "session-unavailable": return context.json({ error: "The session is not ready in this workspace." }, 422);
       case "ambiguous": return context.json({ error: "Specify the agent source for this session ID." }, 409);
+      case "follow-unavailable": return context.json({ error: "Follow-up requires a Codex or Claude Code session you uploaded." }, 403);
       case "limit": return context.json({ error: "This report already has the maximum number of session references." }, 400);
     }
   });
+  routes.post(`/cli${reportDetailPath}/sessions/:sessionId/follow`, requireCliAccount,
+    bodyLimit({ maxSize: MAX_CODEX_IMPORT_BYTES }), async (context) => {
+      const workspaceId = uuid.safeParse(context.req.param("workspaceId")).data;
+      const reportId = uuid.safeParse(context.req.param("reportId")).data;
+      const sessionId = uuid.safeParse(context.req.param("sessionId")).data;
+      if (!workspaceId || !reportId || !sessionId) return context.json({ error: "Follow-up is unavailable." }, 404);
+      const request = reportFollowUpRequest.safeParse(await context.req.json().catch(() => null));
+      if (!request.success) return context.json({ error: "Provide ordered conversation messages." }, 400);
+      const receipt = await sessions.receiveReportFollowUp({
+        workspaceId, reportId, sessionId, userId: context.get("cliAccount").userId, events: request.data.events,
+      });
+      if (receipt === undefined) return context.json({ error: "Follow-up is unavailable." }, 404);
+      if (!receipt) return context.json({ error: "This session cannot accept more messages." }, 409);
+      return context.json(codexImportResponse.parse(receipt), receipt.alreadyReceived ? 200 : 202);
+    });
+
 }
